@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Runtime hosts may expose an Agent-bundled Node under /usr/local/bin. The
+# Supervisor is infrastructure software and must use the system Node installed
+# and versioned by Runtime Management.
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/usr/local/sbin:${PATH:-}"
+
 REPO_URL="${SOP_AGENTD_REPO_URL:-https://github.com/ChangfengHU/sop-runtime-agentd.git}"
 REF="${SOP_AGENTD_REF:-main}"
 INSTALL_DIR="${SOP_AGENTD_INSTALL_DIR:-/opt/sop-runtime-agentd}"
@@ -22,7 +27,7 @@ for command in git node npm; do
   command -v "$command" >/dev/null 2>&1 || { echo "$command is required" >&2; exit 1; }
 done
 
-node -e '
+/usr/bin/node -e '
   const [major, minor] = process.versions.node.split(".").map(Number);
   if (major < 22 || (major === 22 && minor < 19)) {
     console.error(`Node.js >=22.19 is required; found ${process.versions.node}`);

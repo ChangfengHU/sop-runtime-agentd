@@ -9,7 +9,7 @@ User=root
 Group=root
 WorkingDirectory=/opt/sop-runtime-agentd
 EnvironmentFile=-/etc/sop-runtime-agentd/agentd.env
-ExecStart=/usr/bin/env node --disable-warning=ExperimentalWarning /opt/sop-runtime-agentd/dist/src/main.js
+ExecStart=/usr/bin/node --disable-warning=ExperimentalWarning /opt/sop-runtime-agentd/dist/src/main.js
 Restart=on-failure
 RestartSec=3
 TimeoutStopSec=20
