@@ -52,7 +52,7 @@ fi
 git -C "$INSTALL_DIR" checkout --detach "$RESOLVED_REF"
 
 cd "$INSTALL_DIR"
-npm ci --omit=dev=false
+npm ci
 npm run build
 
 install -d -m 0700 /etc/sop-runtime-agentd/credentials
@@ -74,5 +74,12 @@ if [[ "$START_SERVICE" == true ]]; then
   install -m 0644 deploy/sop-runtime-agentd.service /etc/systemd/system/sop-runtime-agentd.service
   systemctl daemon-reload
   systemctl enable --now sop-runtime-agentd.service
-  curl -fsS "http://127.0.0.1:${PORT}/health"
+  for _ in $(seq 1 30); do
+    if curl -fsS "http://127.0.0.1:${PORT}/health"; then
+      exit 0
+    fi
+    sleep 1
+  done
+  systemctl status sop-runtime-agentd.service --no-pager -l >&2 || true
+  exit 4
 fi
