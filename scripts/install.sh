@@ -35,13 +35,21 @@ done
   }
 '
 
-if [[ -d "$INSTALL_DIR/.git" ]]; then
-  git -C "$INSTALL_DIR" fetch --prune origin
-  git -C "$INSTALL_DIR" checkout --detach "origin/$REF"
-else
+if [[ ! -d "$INSTALL_DIR/.git" ]]; then
   mkdir -p "$(dirname "$INSTALL_DIR")"
-  git clone --filter=blob:none --branch "$REF" "$REPO_URL" "$INSTALL_DIR"
+  git clone --filter=blob:none "$REPO_URL" "$INSTALL_DIR"
 fi
+
+git -C "$INSTALL_DIR" fetch --prune --tags origin
+if git -C "$INSTALL_DIR" rev-parse --verify --quiet "${REF}^{commit}" >/dev/null; then
+  RESOLVED_REF="$REF"
+elif git -C "$INSTALL_DIR" rev-parse --verify --quiet "origin/${REF}^{commit}" >/dev/null; then
+  RESOLVED_REF="origin/$REF"
+else
+  echo "Unable to resolve Supervisor ref: $REF" >&2
+  exit 3
+fi
+git -C "$INSTALL_DIR" checkout --detach "$RESOLVED_REF"
 
 cd "$INSTALL_DIR"
 npm ci --omit=dev=false
