@@ -1,0 +1,158 @@
+import { fork, type ChildProcess } from "node:child_process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+import type {
+  AdapterRunContext,
+  AdapterRunResult,
+  AgentCapabilities,
+  AgentRuntimeAdapter,
+} from "../contracts.js";
+import { CredentialResolver } from "../credentials.js";
+import type { PiWorkerInput, PiWorkerMessage } from "./pi-protocol.js";
+
+export interface PiAdapterOptions {
+  credentialResolver: CredentialResolver;
+  dataDir: string;
+  agentDir?: string;
+}
+
+export class PiAdapter implements AgentRuntimeAdapter {
+  readonly id = "sop-native" as const;
+  readonly displayName = "SOP Native Agent (Pi)";
+  private readonly active = new Map<string, ChildProcess>();
+
+  constructor(private readonly options: PiAdapterOptions) {}
+
+  capabilities(): AgentCapabilities {
+    return {
+      persistentSessions: true,
+      streamingEvents: true,
+      toolEvents: true,
+      approvals: false,
+      steering: false,
+      resume: true,
+      subagents: false,
+      nativeCancellation: true,
+      skills: true,
+      localWorkspace: true,
+    };
+  }
+
+  async probe(): Promise<{ ok: boolean; detail: Record<string, unknown>; reason: string }> {
+    const workerPath = fileURLToPath(new URL("../workers/pi-worker.js", import.meta.url));
+    return {
+      ok: true,
+      detail: {
+        adapter: this.id,
+        workerPath,
+        isolatedProcess: true,
+        sdk: "@earendil-works/pi-coding-agent",
+      },
+      reason: "",
+    };
+  }
+
+  async run(context: AdapterRunContext): Promise<AdapterRunResult> {
+    const { execution } = context;
+    if (!execution.provider) {
+      throw new Error("sop-native execution requires a Provider Profile");
+    }
+    const apiKey = await this.options.credentialResolver.resolve(execution.provider.credentialRef);
+    const workerPath = fileURLToPath(new URL("../workers/pi-worker.js", import.meta.url));
+    const child = fork(workerPath, [], {
+      cwd: execution.workspace,
+      env: {
+        ...process.env,
+        SOP_OUTPUT_DIR: execution.outputDir,
+        SOP_AGENTD_MODEL_API_KEY: apiKey,
+      },
+      stdio: ["ignore", "pipe", "pipe", "ipc"],
+    });
+    this.active.set(execution.id, child);
+
+    const workerInput: PiWorkerInput = {
+      executionId: execution.id,
+      workspace: execution.workspace,
+      outputDir: execution.outputDir,
+      instruction: execution.instruction,
+      materials: execution.materials,
+      ...(execution.skill ? { skill: execution.skill } : {}),
+      provider: execution.provider,
+      sessionPolicy: (execution.metadata.sessionPolicy as PiWorkerInput["sessionPolicy"] | undefined) ?? "ephemeral",
+      requestedSessionId: execution.sessionId,
+      sessionDir: path.join(this.options.dataDir, "sessions", execution.instanceId),
+      agentDir: this.options.agentDir ?? path.join(this.options.dataDir, "pi-agent"),
+    };
+
+    let stderr = "";
+    child.stderr?.setEncoding("utf8");
+    child.stderr?.on("data", (chunk: string) => {
+      stderr = `${stderr}${chunk}`.slice(-8_192);
+    });
+    child.stdout?.resume();
+
+    return await new Promise<AdapterRunResult>((resolve, reject) => {
+      let settled = false;
+      let emitChain = Promise.resolve();
+      const settle = (callback: () => void): void => {
+        if (settled) return;
+        settled = true;
+        this.active.delete(execution.id);
+        context.signal.removeEventListener("abort", onAbort);
+        callback();
+      };
+      const onAbort = (): void => {
+        if (child.connected) child.send({ kind: "cancel" });
+        setTimeout(() => {
+          if (!child.killed) child.kill("SIGKILL");
+        }, 5_000).unref();
+      };
+      context.signal.addEventListener("abort", onAbort, { once: true });
+
+      child.on("message", (message: PiWorkerMessage) => {
+        if (message.kind === "event") {
+          emitChain = emitChain.then(async () => {
+            await context.emit({
+              type: message.type,
+              status: "running",
+              producer: "pi-agent",
+              subject: { kind: message.subjectKind, id: message.subjectId },
+              summary: message.summary,
+              data: message.data,
+            });
+          });
+        } else if (message.kind === "result") {
+          void emitChain.then(() => {
+            settle(() => resolve(message));
+            child.disconnect();
+          });
+        } else {
+          void emitChain.then(() => settle(() => reject(new Error(message.message))));
+        }
+      });
+      child.once("error", (error) => settle(() => reject(error)));
+      child.once("exit", (code, signal) => {
+        if (!settled) {
+          settle(() =>
+            reject(
+              new Error(
+                `Pi worker exited before returning a result (code=${String(code)}, signal=${String(signal)})${
+                  stderr ? `: ${stderr}` : ""
+                }`,
+              ),
+            ),
+          );
+        }
+      });
+      child.send(workerInput);
+    });
+  }
+
+  async cancel(executionId: string): Promise<void> {
+    const child = this.active.get(executionId);
+    if (child?.connected) {
+      child.send({ kind: "cancel" });
+    }
+  }
+}

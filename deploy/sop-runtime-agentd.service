@@ -1,0 +1,22 @@
+[Unit]
+Description=SOP Runtime Agent Supervisor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/sop-runtime-agentd
+EnvironmentFile=-/etc/sop-runtime-agentd/agentd.env
+ExecStart=/usr/bin/env node --disable-warning=ExperimentalWarning /opt/sop-runtime-agentd/dist/src/main.js
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=20
+KillMode=mixed
+LimitNOFILE=65536
+StateDirectory=sop-runtime-agentd
+RuntimeDirectory=sop-runtime-agentd
+
+[Install]
+WantedBy=multi-user.target
