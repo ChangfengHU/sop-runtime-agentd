@@ -12,6 +12,13 @@ interface EventRow {
   payload_json: string;
 }
 
+export interface StoreHealth {
+  ok: boolean;
+  executionCount: number;
+  eventCount: number;
+  statusCounts: Record<string, number>;
+}
+
 export class SupervisorStore {
   private readonly database: DatabaseSync;
 
@@ -142,6 +149,24 @@ export class SupervisorStore {
       `)
       .all(executionId, Math.max(afterId, 0), Math.min(Math.max(limit, 1), 2_000)) as unknown as EventRow[];
     return rows.map((row) => ({ ...(JSON.parse(row.payload_json) as RuntimeEvent), id: row.id }));
+  }
+
+  health(): StoreHealth {
+    const executionCount = Number(
+      (this.database.prepare("SELECT COUNT(*) AS count FROM executions").get() as { count: number }).count,
+    );
+    const eventCount = Number(
+      (this.database.prepare("SELECT COUNT(*) AS count FROM runtime_events").get() as { count: number }).count,
+    );
+    const rows = this.database
+      .prepare("SELECT status, COUNT(*) AS count FROM executions GROUP BY status")
+      .all() as unknown as Array<{ status: string; count: number }>;
+    return {
+      ok: true,
+      executionCount,
+      eventCount,
+      statusCounts: Object.fromEntries(rows.map((row) => [row.status, Number(row.count)])),
+    };
   }
 
   recoverInterruptedExecutions(): number {

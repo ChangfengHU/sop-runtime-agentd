@@ -80,6 +80,18 @@ test("serves execution records, replayable events, and artifact content", async 
   try {
     const unauthorized = await fetch(`${base}/health`);
     assert.equal(unauthorized.status, 401);
+    const healthResponse = await fetch(`${base}/health`, { headers });
+    assert.equal(healthResponse.status, 200);
+    const health = (await healthResponse.json()) as {
+      version: string;
+      scheduler: { active: number; queued: number; maxConcurrent: number };
+      storage: { ok: boolean; driver: string; executionCount: number };
+    };
+    assert.equal(health.version, "0.1.0");
+    assert.deepEqual(health.scheduler, { active: 0, queued: 0, maxConcurrent: 1, accepting: true, availableSlots: 1 });
+    assert.equal(health.storage.ok, true);
+    assert.equal(health.storage.driver, "sqlite");
+    assert.equal(health.storage.executionCount, 0);
     const response = await fetch(`${base}/v1/executions`, {
       method: "POST",
       headers: { ...headers, "content-type": "application/json" },

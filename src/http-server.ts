@@ -44,11 +44,7 @@ export function createHttpServer(supervisor: RuntimeAgentSupervisor): http.Serve
       const url = new URL(request.url || "/", `http://${request.headers.host || "localhost"}`);
       const method = request.method || "GET";
       if (method === "GET" && url.pathname === "/health") {
-        json(response, 200, {
-          ok: true,
-          service: "sop-runtime-agentd",
-          adapters: supervisor.listAdapters(),
-        });
+        json(response, 200, supervisor.healthSnapshot());
         return;
       }
       if (method === "GET" && url.pathname === "/v1/adapters") {

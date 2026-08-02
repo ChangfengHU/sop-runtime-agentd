@@ -16,6 +16,7 @@ import { SupervisorStore } from "./store.js";
 import { assertPathWithin, ensureDir, errorMessage, newId, nowIso } from "./util.js";
 
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
+export const SUPERVISOR_VERSION = "0.1.0";
 
 export class RuntimeAgentSupervisor {
   private readonly adapters = new Map<string, AgentRuntimeAdapter>();
@@ -150,6 +151,28 @@ export class RuntimeAgentSupervisor {
   listEvents(executionId: string, afterId?: number, limit?: number): RuntimeEvent[] {
     this.requiredExecution(executionId);
     return this.store.listEvents(executionId, afterId, limit);
+  }
+
+  healthSnapshot(): Record<string, unknown> {
+    return {
+      ok: true,
+      service: "sop-runtime-agentd",
+      version: SUPERVISOR_VERSION,
+      uptimeSeconds: Math.floor(process.uptime()),
+      scheduler: {
+        accepting: !this.closing,
+        active: this.activeCount,
+        queued: this.queued.length,
+        maxConcurrent: this.config.maxConcurrent,
+        availableSlots: Math.max(0, this.config.maxConcurrent - this.activeCount),
+      },
+      storage: {
+        driver: "sqlite",
+        path: this.config.databasePath,
+        ...this.store.health(),
+      },
+      adapters: this.listAdapters(),
+    };
   }
 
   isTerminal(status: ExecutionRecord["status"]): boolean {
