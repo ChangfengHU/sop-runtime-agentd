@@ -9,6 +9,7 @@ import type {
   AgentRuntimeAdapter,
 } from "../contracts.js";
 import { CredentialResolver } from "../credentials.js";
+import { SupervisorError } from "../util.js";
 import type { PiWorkerInput, PiWorkerMessage } from "./pi-protocol.js";
 
 export interface PiAdapterOptions {
@@ -30,7 +31,7 @@ export class PiAdapter implements AgentRuntimeAdapter {
       streamingEvents: true,
       toolEvents: true,
       approvals: false,
-      steering: false,
+      steering: true,
       resume: true,
       subagents: false,
       nativeCancellation: true,
@@ -79,7 +80,7 @@ export class PiAdapter implements AgentRuntimeAdapter {
       materials: execution.materials,
       ...(execution.skill ? { skill: execution.skill } : {}),
       provider: execution.provider,
-      sessionPolicy: (execution.metadata.sessionPolicy as PiWorkerInput["sessionPolicy"] | undefined) ?? "ephemeral",
+      sessionPolicy: execution.sessionPolicy,
       requestedSessionId: execution.sessionId,
       sessionDir: path.join(this.options.dataDir, "sessions", execution.instanceId),
       agentDir: this.options.agentDir ?? path.join(this.options.dataDir, "pi-agent"),
@@ -154,5 +155,13 @@ export class PiAdapter implements AgentRuntimeAdapter {
     if (child?.connected) {
       child.send({ kind: "cancel" });
     }
+  }
+
+  async steer(executionId: string, message: string): Promise<void> {
+    const child = this.active.get(executionId);
+    if (!child?.connected) {
+      throw new SupervisorError(`Execution ${executionId} has no active pi worker to steer`, 409);
+    }
+    child.send({ kind: "steer", message });
   }
 }

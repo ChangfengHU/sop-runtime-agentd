@@ -29,7 +29,8 @@ server.listen(config.port, config.host, () => {
       service: "sop-runtime-agentd",
       message: "Runtime Agent Supervisor listening",
       address: `http://${config.host}:${config.port}`,
-      recoveredExecutions: recovered,
+      reconciledExecutions: recovered.executions,
+      reconciledSessions: recovered.sessions,
     })}\n`,
   );
 });

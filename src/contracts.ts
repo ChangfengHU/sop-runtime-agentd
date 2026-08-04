@@ -57,6 +57,63 @@ export const skillBindingSchema = z.object({
 
 export type SkillBinding = z.infer<typeof skillBindingSchema>;
 
+export const sessionStatusSchema = z.enum(["idle", "active", "closed"]);
+
+export type SessionStatus = z.infer<typeof sessionStatusSchema>;
+
+export const createSessionSchema = z.object({
+  requestId: z.string().min(1).optional(),
+  instanceId: z.string().min(1),
+  engine: engineIdSchema,
+  workspace: z.string().min(1),
+  providerId: z.string().min(1).optional(),
+  title: z.string().default(""),
+  metadata: z.record(z.string(), z.unknown()).default({}),
+});
+
+export type CreateSessionInput = z.infer<typeof createSessionSchema>;
+
+export const createTurnSchema = z.object({
+  requestId: z.string().min(1).optional(),
+  nodeId: z.string().min(1).optional(),
+  instruction: z.string().min(1),
+  materials: z.array(materialSchema).default([]),
+  skill: skillBindingSchema.optional(),
+  outputDir: z.string().min(1).optional(),
+  timeoutMs: z.number().int().min(1_000).max(7_200_000).default(1_200_000),
+  metadata: z.record(z.string(), z.unknown()).default({}),
+});
+
+export type CreateTurnInput = z.infer<typeof createTurnSchema>;
+
+export const steerExecutionSchema = z.object({
+  message: z.string().min(1),
+});
+
+export const resolveApprovalSchema = z.object({
+  approvalId: z.string().min(1).optional(),
+  decision: z.enum(["approve", "reject"]),
+  note: z.string().default(""),
+});
+
+export interface SessionRecord {
+  id: string;
+  requestId: string;
+  instanceId: string;
+  engine: EngineId;
+  providerId: string;
+  workspace: string;
+  title: string;
+  status: SessionStatus;
+  nativeSessionId: string;
+  turnCount: number;
+  activeExecutionId: string;
+  lastExecutionId: string;
+  createdAt: string;
+  lastActivityAt: string;
+  metadata: Record<string, unknown>;
+}
+
 export const createExecutionSchema = z.object({
   requestId: z.string().min(1).optional(),
   instanceId: z.string().min(1),
@@ -105,6 +162,7 @@ export interface ExecutionRecord {
   requestId: string;
   instanceId: string;
   nodeId: string;
+  sessionRef: string;
   engine: EngineId;
   status: ExecutionStatus;
   workspace: string;
@@ -130,7 +188,7 @@ export interface RuntimeEvent<T = unknown> {
   id: number;
   executionId: string;
   type: string;
-  status: ExecutionStatus;
+  status: ExecutionStatus | SessionStatus;
   producer: string;
   subject: {
     kind: "execution" | "session" | "skill" | "model" | "tool" | "artifact" | "approval";
@@ -160,4 +218,9 @@ export interface AgentRuntimeAdapter {
   probe(): Promise<{ ok: boolean; detail: Record<string, unknown>; reason: string }>;
   run(context: AdapterRunContext): Promise<AdapterRunResult>;
   cancel?(executionId: string): Promise<void>;
+  steer?(executionId: string, message: string): Promise<void>;
+  resolveApproval?(
+    executionId: string,
+    input: { approvalId: string; decision: "approve" | "reject"; note: string },
+  ): Promise<void>;
 }

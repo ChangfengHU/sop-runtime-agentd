@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 
-import type { ExecutionRecord, RuntimeEvent } from "./contracts.js";
+import type { ExecutionRecord, RuntimeEvent, SessionRecord } from "./contracts.js";
 import { nowIso } from "./util.js";
 
 interface JsonRow {
@@ -47,12 +47,64 @@ export class SupervisorStore {
         execution_id TEXT NOT NULL,
         event_type TEXT NOT NULL,
         payload_json TEXT NOT NULL,
-        occurred_at TEXT NOT NULL,
-        FOREIGN KEY(execution_id) REFERENCES executions(id) ON DELETE CASCADE
+        occurred_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_runtime_events_execution_id
         ON runtime_events(execution_id, id);
+
+      CREATE TABLE IF NOT EXISTS sessions (
+        id TEXT PRIMARY KEY,
+        request_id TEXT UNIQUE,
+        instance_id TEXT NOT NULL,
+        engine TEXT NOT NULL,
+        status TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_sessions_instance_created
+        ON sessions(instance_id, created_at DESC);
     `);
+    this.migrateRuntimeEventsForeignKey();
+    this.ensureExecutionSessionColumn();
+  }
+
+  // Session-level events have no executions row, so the legacy FOREIGN KEY on
+  // runtime_events must go. Rebuilds the table once for databases created
+  // before sessions became first-class; event ids are preserved.
+  private migrateRuntimeEventsForeignKey(): void {
+    const foreignKeys = this.database.prepare("PRAGMA foreign_key_list(runtime_events)").all();
+    if (foreignKeys.length === 0) return;
+    this.database.exec(`
+      PRAGMA foreign_keys = OFF;
+      BEGIN;
+      CREATE TABLE runtime_events_migrated (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        execution_id TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        occurred_at TEXT NOT NULL
+      );
+      INSERT INTO runtime_events_migrated (id, execution_id, event_type, payload_json, occurred_at)
+        SELECT id, execution_id, event_type, payload_json, occurred_at FROM runtime_events;
+      DROP TABLE runtime_events;
+      ALTER TABLE runtime_events_migrated RENAME TO runtime_events;
+      COMMIT;
+      PRAGMA foreign_keys = ON;
+    `);
+    this.database.exec(
+      "CREATE INDEX IF NOT EXISTS idx_runtime_events_execution_id ON runtime_events(execution_id, id);",
+    );
+  }
+
+  private ensureExecutionSessionColumn(): void {
+    const columns = this.database.prepare("PRAGMA table_info(executions)").all() as unknown as Array<{ name: string }>;
+    if (!columns.some((column) => column.name === "session_ref")) {
+      this.database.exec("ALTER TABLE executions ADD COLUMN session_ref TEXT NOT NULL DEFAULT ''");
+    }
+    this.database.exec(
+      "CREATE INDEX IF NOT EXISTS idx_executions_session_created ON executions(session_ref, created_at);",
+    );
   }
 
   close(): void {
@@ -63,9 +115,9 @@ export class SupervisorStore {
     this.database
       .prepare(`
         INSERT INTO executions (
-          id, request_id, status, engine, instance_id, node_id,
+          id, request_id, status, engine, instance_id, node_id, session_ref,
           payload_json, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
       .run(
         execution.id,
@@ -74,6 +126,7 @@ export class SupervisorStore {
         execution.engine,
         execution.instanceId,
         execution.nodeId,
+        execution.sessionRef,
         JSON.stringify(execution),
         execution.createdAt,
         execution.createdAt,
@@ -85,7 +138,7 @@ export class SupervisorStore {
     const result = this.database
       .prepare(`
         UPDATE executions
-        SET status = ?, engine = ?, instance_id = ?, node_id = ?, payload_json = ?, updated_at = ?
+        SET status = ?, engine = ?, instance_id = ?, node_id = ?, session_ref = ?, payload_json = ?, updated_at = ?
         WHERE id = ?
       `)
       .run(
@@ -93,6 +146,7 @@ export class SupervisorStore {
         execution.engine,
         execution.instanceId,
         execution.nodeId,
+        execution.sessionRef,
         JSON.stringify(execution),
         nowIso(),
         execution.id,
@@ -124,6 +178,87 @@ export class SupervisorStore {
     return rows.map((row) => JSON.parse(row.payload_json) as ExecutionRecord);
   }
 
+  listExecutionsBySession(sessionRef: string, limit = 200): ExecutionRecord[] {
+    const rows = this.database
+      .prepare("SELECT payload_json FROM executions WHERE session_ref = ? ORDER BY created_at ASC LIMIT ?")
+      .all(sessionRef, Math.min(Math.max(limit, 1), 1_000)) as unknown as JsonRow[];
+    return rows.map((row) => JSON.parse(row.payload_json) as ExecutionRecord);
+  }
+
+  listActiveExecutions(): ExecutionRecord[] {
+    const rows = this.database
+      .prepare(`
+        SELECT payload_json FROM executions
+        WHERE status IN ('queued', 'running', 'waiting_approval')
+        ORDER BY created_at ASC
+      `)
+      .all() as unknown as JsonRow[];
+    return rows.map((row) => JSON.parse(row.payload_json) as ExecutionRecord);
+  }
+
+  createSession(session: SessionRecord): SessionRecord {
+    this.database
+      .prepare(`
+        INSERT INTO sessions (id, request_id, instance_id, engine, status, payload_json, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `)
+      .run(
+        session.id,
+        session.requestId || null,
+        session.instanceId,
+        session.engine,
+        session.status,
+        JSON.stringify(session),
+        session.createdAt,
+        session.createdAt,
+      );
+    return session;
+  }
+
+  saveSession(session: SessionRecord): SessionRecord {
+    const result = this.database
+      .prepare("UPDATE sessions SET status = ?, payload_json = ?, updated_at = ? WHERE id = ?")
+      .run(session.status, JSON.stringify(session), nowIso(), session.id);
+    if (result.changes !== 1) {
+      throw new Error(`Session ${session.id} does not exist`);
+    }
+    return session;
+  }
+
+  getSession(id: string): SessionRecord | undefined {
+    const row = this.database
+      .prepare("SELECT payload_json FROM sessions WHERE id = ?")
+      .get(id) as JsonRow | undefined;
+    return row ? (JSON.parse(row.payload_json) as SessionRecord) : undefined;
+  }
+
+  getSessionByRequestId(requestId: string): SessionRecord | undefined {
+    const row = this.database
+      .prepare("SELECT payload_json FROM sessions WHERE request_id = ?")
+      .get(requestId) as JsonRow | undefined;
+    return row ? (JSON.parse(row.payload_json) as SessionRecord) : undefined;
+  }
+
+  listSessions(limit = 50, instanceId?: string): SessionRecord[] {
+    const rows = (
+      instanceId
+        ? this.database
+            .prepare("SELECT payload_json FROM sessions WHERE instance_id = ? ORDER BY created_at DESC LIMIT ?")
+            .all(instanceId, Math.min(Math.max(limit, 1), 500))
+        : this.database
+            .prepare("SELECT payload_json FROM sessions ORDER BY created_at DESC LIMIT ?")
+            .all(Math.min(Math.max(limit, 1), 500))
+    ) as unknown as JsonRow[];
+    return rows.map((row) => JSON.parse(row.payload_json) as SessionRecord);
+  }
+
+  sessionCounts(): Record<string, number> {
+    const rows = this.database
+      .prepare("SELECT status, COUNT(*) AS count FROM sessions GROUP BY status")
+      .all() as unknown as Array<{ status: string; count: number }>;
+    return Object.fromEntries(rows.map((row) => [row.status, Number(row.count)]));
+  }
+
   appendEvent(event: Omit<RuntimeEvent, "id">): RuntimeEvent {
     const placeholder = { ...event, id: 0 } satisfies RuntimeEvent;
     const result = this.database
@@ -137,6 +272,18 @@ export class SupervisorStore {
       .prepare("UPDATE runtime_events SET payload_json = ? WHERE id = ?")
       .run(JSON.stringify(stored), stored.id);
     return stored;
+  }
+
+  listAllEvents(afterId = 0, limit = 500): RuntimeEvent[] {
+    const rows = this.database
+      .prepare("SELECT id, payload_json FROM runtime_events WHERE id > ? ORDER BY id ASC LIMIT ?")
+      .all(Math.max(afterId, 0), Math.min(Math.max(limit, 1), 2_000)) as unknown as EventRow[];
+    return rows.map((row) => ({ ...(JSON.parse(row.payload_json) as RuntimeEvent), id: row.id }));
+  }
+
+  lastEventId(): number {
+    const row = this.database.prepare("SELECT MAX(id) AS id FROM runtime_events").get() as { id: number | null };
+    return Number(row.id ?? 0);
   }
 
   listEvents(executionId: string, afterId = 0, limit = 500): RuntimeEvent[] {
@@ -179,19 +326,48 @@ export class SupervisorStore {
     const finishedAt = nowIso();
     for (const row of rows) {
       const execution = JSON.parse(row.payload_json) as ExecutionRecord;
+      const previousStatus = execution.status;
       execution.status = "failed";
       execution.finishedAt = finishedAt;
-      execution.error = "Runtime Agent Supervisor restarted before this execution completed";
+      execution.error = "Runtime Gateway restarted while this execution was in flight (process_lost)";
       this.saveExecution(execution);
       this.appendEvent({
         executionId: execution.id,
-        type: "execution.recovered_as_failed",
+        type: "execution.reconciled",
         status: "failed",
         producer: "runtime-agent-supervisor",
         subject: { kind: "execution", id: execution.id },
         summary: execution.error,
-        data: { previousStatus: "interrupted" },
+        data: { reason: "process_lost", previousStatus, sessionRef: execution.sessionRef },
         occurredAt: finishedAt,
+      });
+    }
+    return rows.length;
+  }
+
+  reconcileSessions(): number {
+    const rows = this.database
+      .prepare("SELECT payload_json FROM sessions WHERE status = 'active'")
+      .all() as unknown as JsonRow[];
+    const timestamp = nowIso();
+    for (const row of rows) {
+      const session = JSON.parse(row.payload_json) as SessionRecord;
+      session.status = "idle";
+      if (session.activeExecutionId) {
+        session.lastExecutionId = session.activeExecutionId;
+        session.activeExecutionId = "";
+      }
+      session.lastActivityAt = timestamp;
+      this.saveSession(session);
+      this.appendEvent({
+        executionId: "",
+        type: "session.reconciled",
+        status: "idle",
+        producer: "runtime-agent-supervisor",
+        subject: { kind: "session", id: session.id },
+        summary: "Session returned to idle after the Runtime Gateway restarted",
+        data: { reason: "process_lost" },
+        occurredAt: timestamp,
       });
     }
     return rows.length;

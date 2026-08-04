@@ -9,7 +9,7 @@ import { EventHub } from "../src/event-hub.js";
 import { createHttpServer } from "../src/http-server.js";
 import { ProviderRegistry } from "../src/providers.js";
 import { SupervisorStore } from "../src/store.js";
-import { RuntimeAgentSupervisor } from "../src/supervisor.js";
+import { PROTOCOL_VERSION, RuntimeAgentSupervisor, SUPERVISOR_VERSION } from "../src/supervisor.js";
 
 class HttpFakeAdapter implements AgentRuntimeAdapter {
   readonly id = "sop-native" as const;
@@ -84,10 +84,12 @@ test("serves execution records, replayable events, and artifact content", async 
     assert.equal(healthResponse.status, 200);
     const health = (await healthResponse.json()) as {
       version: string;
+      protocolVersion: number;
       scheduler: { active: number; queued: number; maxConcurrent: number };
       storage: { ok: boolean; driver: string; executionCount: number };
     };
-    assert.equal(health.version, "0.1.0");
+    assert.equal(health.version, SUPERVISOR_VERSION);
+    assert.equal(health.protocolVersion, PROTOCOL_VERSION);
     assert.deepEqual(health.scheduler, { active: 0, queued: 0, maxConcurrent: 1, accepting: true, availableSlots: 1 });
     assert.equal(health.storage.ok, true);
     assert.equal(health.storage.driver, "sqlite");

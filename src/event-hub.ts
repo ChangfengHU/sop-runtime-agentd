@@ -4,6 +4,7 @@ type EventListener = (event: RuntimeEvent) => void;
 
 export class EventHub {
   private readonly listeners = new Map<string, Set<EventListener>>();
+  private readonly globalListeners = new Set<EventListener>();
 
   subscribe(executionId: string, listener: EventListener): () => void {
     const current = this.listeners.get(executionId) ?? new Set<EventListener>();
@@ -17,8 +18,20 @@ export class EventHub {
     };
   }
 
+  subscribeAll(listener: EventListener): () => void {
+    this.globalListeners.add(listener);
+    return () => {
+      this.globalListeners.delete(listener);
+    };
+  }
+
   publish(event: RuntimeEvent): void {
-    for (const listener of this.listeners.get(event.executionId) ?? []) {
+    if (event.executionId) {
+      for (const listener of this.listeners.get(event.executionId) ?? []) {
+        listener(event);
+      }
+    }
+    for (const listener of this.globalListeners) {
       listener(event);
     }
   }

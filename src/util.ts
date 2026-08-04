@@ -32,3 +32,13 @@ export function assertPathWithin(parent: string, child: string, label: string): 
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
+
+export class SupervisorError extends Error {
+  constructor(
+    message: string,
+    readonly httpStatus: number = 400,
+  ) {
+    super(message);
+    this.name = "SupervisorError";
+  }
+}

@@ -36,3 +36,14 @@ export interface PiWorkerError {
 }
 
 export type PiWorkerMessage = PiWorkerEvent | PiWorkerResult | PiWorkerError;
+
+export interface PiWorkerCancelCommand {
+  kind: "cancel";
+}
+
+export interface PiWorkerSteerCommand {
+  kind: "steer";
+  message: string;
+}
+
+export type PiWorkerCommand = PiWorkerCancelCommand | PiWorkerSteerCommand;

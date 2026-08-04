@@ -10,10 +10,12 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import type { Material } from "../contracts.js";
-import type { PiWorkerInput, PiWorkerMessage } from "../adapters/pi-protocol.js";
+import type { PiWorkerCommand, PiWorkerInput, PiWorkerMessage } from "../adapters/pi-protocol.js";
 import { errorMessage, newId } from "../util.js";
 
-let activeSession: { abort(): Promise<void>; dispose(): void } | undefined;
+let activeSession:
+  | { abort(): Promise<void>; dispose(): void; steer(text: string): Promise<void>; sessionId: string }
+  | undefined;
 
 function send(message: PiWorkerMessage): void {
   if (process.send) {
@@ -271,8 +273,26 @@ async function run(input: PiWorkerInput): Promise<void> {
 }
 
 process.on("message", (message: unknown) => {
-  if (message && typeof message === "object" && "kind" in message && message.kind === "cancel") {
-    void activeSession?.abort();
+  if (message && typeof message === "object" && "kind" in message) {
+    const command = message as PiWorkerCommand;
+    if (command.kind === "cancel") {
+      void activeSession?.abort();
+      return;
+    }
+    if (command.kind === "steer") {
+      const session = activeSession;
+      if (!session) return;
+      send({
+        kind: "event",
+        type: "session.steer.delivered",
+        subjectKind: "session",
+        subjectId: session.sessionId,
+        summary: "Steering message delivered to the running Pi Agent",
+        data: { message: command.message },
+      });
+      void session.steer(command.message);
+      return;
+    }
     return;
   }
   void run(message as PiWorkerInput).catch((error) => {

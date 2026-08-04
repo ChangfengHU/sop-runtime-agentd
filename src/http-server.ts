@@ -3,7 +3,7 @@ import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
 
 import type { RuntimeAgentSupervisor } from "./supervisor.js";
-import { errorMessage } from "./util.js";
+import { errorMessage, SupervisorError } from "./util.js";
 
 const JSON_LIMIT_BYTES = 2 * 1024 * 1024;
 
@@ -59,9 +59,112 @@ export function createHttpServer(supervisor: RuntimeAgentSupervisor): http.Serve
         json(response, 200, { adapters: await supervisor.probeAdapters() });
         return;
       }
+      if (method === "GET" && url.pathname === "/v1/status") {
+        json(response, 200, supervisor.statusSnapshot());
+        return;
+      }
+      if (method === "POST" && url.pathname === "/v1/sessions") {
+        const result = await supervisor.createSession(await readJson(request));
+        json(response, result.created ? 201 : 200, result);
+        return;
+      }
+      if (method === "GET" && url.pathname === "/v1/sessions") {
+        json(response, 200, {
+          sessions: supervisor.listSessions(
+            Number(url.searchParams.get("limit") || 50),
+            url.searchParams.get("instanceId") || undefined,
+          ),
+        });
+        return;
+      }
+      const sessionCloseMatch = matches(url.pathname, /^\/v1\/sessions\/([^/]+)\/close$/u);
+      if (method === "POST" && sessionCloseMatch) {
+        json(response, 200, { session: await supervisor.closeSession(decodeURIComponent(sessionCloseMatch[1] || "")) });
+        return;
+      }
+      const sessionTurnsMatch = matches(url.pathname, /^\/v1\/sessions\/([^/]+)\/turns$/u);
+      if (method === "POST" && sessionTurnsMatch) {
+        const result = await supervisor.createTurn(
+          decodeURIComponent(sessionTurnsMatch[1] || ""),
+          await readJson(request),
+        );
+        json(response, result.created ? 202 : 200, result);
+        return;
+      }
+      const sessionExecutionsMatch = matches(url.pathname, /^\/v1\/sessions\/([^/]+)\/executions$/u);
+      if (method === "GET" && sessionExecutionsMatch) {
+        json(response, 200, {
+          executions: supervisor.listSessionExecutions(
+            decodeURIComponent(sessionExecutionsMatch[1] || ""),
+            Number(url.searchParams.get("limit") || 200),
+          ),
+        });
+        return;
+      }
+      const sessionMatch = matches(url.pathname, /^\/v1\/sessions\/([^/]+)$/u);
+      if (method === "GET" && sessionMatch) {
+        const session = supervisor.getSession(decodeURIComponent(sessionMatch[1] || ""));
+        if (!session) json(response, 404, { error: "not_found" });
+        else json(response, 200, { session });
+        return;
+      }
       if (method === "POST" && url.pathname === "/v1/executions") {
         const result = await supervisor.submit(await readJson(request));
         json(response, result.created ? 202 : 200, result);
+        return;
+      }
+      if (method === "GET" && url.pathname === "/v1/events") {
+        const acceptsSse = request.headers.accept?.includes("text/event-stream") === true;
+        const afterId = Number(request.headers["last-event-id"] || url.searchParams.get("after") || 0);
+        if (!acceptsSse) {
+          json(response, 200, { events: supervisor.listAllEvents(afterId) });
+          return;
+        }
+        response.writeHead(200, {
+          "content-type": "text/event-stream; charset=utf-8",
+          "cache-control": "no-cache, no-transform",
+          connection: "keep-alive",
+          "x-accel-buffering": "no",
+        });
+        const writeEvent = (event: ReturnType<RuntimeAgentSupervisor["listAllEvents"]>[number]): void => {
+          response.write(`id: ${event.id}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+        };
+        let cursor = afterId;
+        for (const event of supervisor.listAllEvents(afterId)) {
+          writeEvent(event);
+          cursor = event.id;
+        }
+        const unsubscribe = supervisor.events.subscribeAll((event) => {
+          if (event.id <= cursor) return;
+          cursor = event.id;
+          writeEvent(event);
+        });
+        const keepAlive = setInterval(() => response.write(": keepalive\n\n"), 15_000);
+        keepAlive.unref();
+        request.once("close", () => {
+          clearInterval(keepAlive);
+          unsubscribe();
+        });
+        return;
+      }
+      const steerMatch = matches(url.pathname, /^\/v1\/executions\/([^/]+)\/steer$/u);
+      if (method === "POST" && steerMatch) {
+        json(response, 200, {
+          execution: await supervisor.steer(decodeURIComponent(steerMatch[1] || ""), await readJson(request)),
+        });
+        return;
+      }
+      const approvalMatch = matches(url.pathname, /^\/v1\/executions\/([^/]+)\/approval$/u);
+      if (method === "POST" && approvalMatch) {
+        json(response, 200, {
+          execution: await supervisor.resolveApproval(decodeURIComponent(approvalMatch[1] || ""), await readJson(request)),
+        });
+        return;
+      }
+      const waitMatch = matches(url.pathname, /^\/v1\/executions\/([^/]+)\/wait$/u);
+      if (method === "GET" && waitMatch) {
+        const timeoutMs = Math.min(Math.max(Number(url.searchParams.get("timeoutMs") || 30_000), 1_000), 120_000);
+        json(response, 200, await supervisor.waitForTerminal(decodeURIComponent(waitMatch[1] || ""), timeoutMs));
         return;
       }
       if (method === "GET" && url.pathname === "/v1/executions") {
@@ -143,7 +246,8 @@ export function createHttpServer(supervisor: RuntimeAgentSupervisor): http.Serve
       }
       json(response, 404, { error: "not_found" });
     } catch (error) {
-      json(response, 400, { error: "request_failed", message: errorMessage(error) });
+      const status = error instanceof SupervisorError ? error.httpStatus : 400;
+      json(response, status, { error: "request_failed", message: errorMessage(error) });
     }
   });
 }
