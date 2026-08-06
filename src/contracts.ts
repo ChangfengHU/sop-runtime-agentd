@@ -90,6 +90,12 @@ export const steerExecutionSchema = z.object({
   message: z.string().min(1),
 });
 
+export const setSessionProviderSchema = z.object({
+  providerId: z.string().min(1),
+});
+
+export type SetSessionProviderInput = z.infer<typeof setSessionProviderSchema>;
+
 export const resolveApprovalSchema = z.object({
   approvalId: z.string().min(1).optional(),
   decision: z.enum(["approve", "reject"]),
@@ -180,6 +186,7 @@ export interface ExecutionRecord {
   finishedAt: string;
   error: string;
   responseText: string;
+  reasoningText?: string;
   artifacts: ArtifactRecord[];
   metadata: Record<string, unknown>;
 }
@@ -209,6 +216,7 @@ export interface AdapterRunResult {
   sessionId: string;
   nativeRunId: string;
   responseText: string;
+  reasoningText?: string;
 }
 
 export interface AgentRuntimeAdapter {

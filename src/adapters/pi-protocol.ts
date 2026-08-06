@@ -28,6 +28,7 @@ export interface PiWorkerResult {
   sessionId: string;
   nativeRunId: string;
   responseText: string;
+  reasoningText?: string;
 }
 
 export interface PiWorkerError {

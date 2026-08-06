@@ -82,6 +82,14 @@ export function createHttpServer(supervisor: RuntimeAgentSupervisor): http.Serve
         json(response, 200, { session: await supervisor.closeSession(decodeURIComponent(sessionCloseMatch[1] || "")) });
         return;
       }
+      const sessionProviderMatch = matches(url.pathname, /^\/v1\/sessions\/([^/]+)\/provider$/u);
+      if (method === "POST" && sessionProviderMatch) {
+        json(response, 200, await supervisor.setSessionProvider(
+          decodeURIComponent(sessionProviderMatch[1] || ""),
+          await readJson(request),
+        ));
+        return;
+      }
       const sessionTurnsMatch = matches(url.pathname, /^\/v1\/sessions\/([^/]+)\/turns$/u);
       if (method === "POST" && sessionTurnsMatch) {
         const result = await supervisor.createTurn(

@@ -84,6 +84,23 @@ function extractAssistantText(event: AgentSessionEvent): string | undefined {
     .trim();
 }
 
+// Same 80000/60000 upper-bound convention used elsewhere for ledger-bound text
+// (Hermes-style truncation): keep the record small even for very long reasoning traces.
+const REASONING_TEXT_MAX_CHARS = 80_000;
+const REASONING_TEXT_TRUNCATED_CHARS = 60_000;
+
+function extractAssistantReasoning(event: AgentSessionEvent): string | undefined {
+  if (event.type !== "message_end" || event.message.role !== "assistant") {
+    return undefined;
+  }
+  const reasoning = event.message.content
+    .filter((part) => part.type === "thinking")
+    .map((part) => part.thinking)
+    .join("\n")
+    .trim();
+  return reasoning || undefined;
+}
+
 async function run(input: PiWorkerInput): Promise<void> {
   const apiKey = process.env.SOP_AGENTD_MODEL_API_KEY;
   if (!apiKey) {
@@ -180,9 +197,12 @@ async function run(input: PiWorkerInput): Promise<void> {
   activeSession = session;
   const nativeRunId = newId("pi-run");
   let responseText = "";
+  let reasoningText = "";
   let runError = "";
   let deltaBuffer = "";
   let deltaTimer: NodeJS.Timeout | undefined;
+  let reasoningDeltaBuffer = "";
+  let reasoningDeltaTimer: NodeJS.Timeout | undefined;
 
   const flushDelta = (): void => {
     if (!deltaBuffer) return;
@@ -199,6 +219,21 @@ async function run(input: PiWorkerInput): Promise<void> {
     deltaTimer = undefined;
   };
 
+  const flushReasoningDelta = (): void => {
+    if (!reasoningDeltaBuffer) return;
+    send({
+      kind: "event",
+      type: "model.reasoning.delta",
+      subjectKind: "model",
+      subjectId: `${input.provider.provider}/${input.provider.model}`,
+      summary: "Agent generated reasoning text",
+      data: { text: reasoningDeltaBuffer },
+    });
+    reasoningDeltaBuffer = "";
+    if (reasoningDeltaTimer) clearTimeout(reasoningDeltaTimer);
+    reasoningDeltaTimer = undefined;
+  };
+
   const unsubscribe = session.subscribe((event) => {
     if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
       deltaBuffer += event.assistantMessageEvent.delta;
@@ -206,8 +241,18 @@ async function run(input: PiWorkerInput): Promise<void> {
       else if (!deltaTimer) deltaTimer = setTimeout(flushDelta, 250);
       return;
     }
+    if (event.type === "message_update" && event.assistantMessageEvent.type === "thinking_delta") {
+      reasoningDeltaBuffer += event.assistantMessageEvent.delta;
+      if (reasoningDeltaBuffer.length >= 512) flushReasoningDelta();
+      else if (!reasoningDeltaTimer) reasoningDeltaTimer = setTimeout(flushReasoningDelta, 250);
+      return;
+    }
     const finalText = extractAssistantText(event);
     if (finalText !== undefined) responseText = finalText;
+    const finalReasoning = extractAssistantReasoning(event);
+    if (finalReasoning !== undefined) {
+      reasoningText = reasoningText ? `${reasoningText}\n\n${finalReasoning}` : finalReasoning;
+    }
     if (event.type === "message_end" && event.message.role === "assistant" && event.message.stopReason === "error") {
       runError = event.message.errorMessage || "Model request failed";
       send({
@@ -262,10 +307,21 @@ async function run(input: PiWorkerInput): Promise<void> {
     await session.prompt(buildPrompt(input, skillName));
     await session.waitForIdle();
     flushDelta();
+    flushReasoningDelta();
     if (runError) throw new Error(runError);
-    send({ kind: "result", sessionId: session.sessionId, nativeRunId, responseText });
+    if (reasoningText.length > REASONING_TEXT_MAX_CHARS) {
+      reasoningText = reasoningText.slice(-REASONING_TEXT_TRUNCATED_CHARS);
+    }
+    send({
+      kind: "result",
+      sessionId: session.sessionId,
+      nativeRunId,
+      responseText,
+      ...(reasoningText ? { reasoningText } : {}),
+    });
   } finally {
     flushDelta();
+    flushReasoningDelta();
     unsubscribe();
     session.dispose();
     activeSession = undefined;

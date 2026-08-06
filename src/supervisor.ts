@@ -8,6 +8,7 @@ import {
   createSessionSchema,
   createTurnSchema,
   resolveApprovalSchema,
+  setSessionProviderSchema,
   steerExecutionSchema,
   type AgentRuntimeAdapter,
   type CreateExecutionInput,
@@ -21,7 +22,7 @@ import { SupervisorStore } from "./store.js";
 import { assertPathWithin, ensureDir, errorMessage, newId, nowIso, SupervisorError } from "./util.js";
 
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
-export const SUPERVISOR_VERSION = "0.2.0";
+export const SUPERVISOR_VERSION = "0.3.0";
 export const PROTOCOL_VERSION = 1;
 
 export class RuntimeAgentSupervisor {
@@ -147,6 +148,30 @@ export class RuntimeAgentSupervisor {
     this.store.saveSession(session);
     await this.emitSessionEvent(session, "session.closed", "Session closed", { turnCount: session.turnCount });
     return session;
+  }
+
+  async setSessionProvider(sessionId: string, rawInput: unknown): Promise<{ session: SessionRecord; deferred: boolean }> {
+    const session = this.requiredSession(sessionId);
+    const input = setSessionProviderSchema.parse(rawInput);
+    if (session.engine === "sop-native") {
+      const provider = await this.providers.get(input.providerId);
+      if (!provider) {
+        throw new Error(`Provider Profile ${input.providerId} is not configured`);
+      }
+    }
+    const oldProviderId = session.providerId;
+    const active = session.activeExecutionId ? this.store.getExecution(session.activeExecutionId) : undefined;
+    const deferred = Boolean(active && !this.isTerminal(active.status));
+    session.providerId = input.providerId;
+    session.lastActivityAt = nowIso();
+    this.store.saveSession(session);
+    await this.emitSessionEvent(
+      session,
+      "session.provider.changed",
+      `Session provider changed ${oldProviderId || "<none>"} -> ${session.providerId}`,
+      { oldProviderId, newProviderId: session.providerId, deferred },
+    );
+    return { session, deferred };
   }
 
   async createTurn(
@@ -574,6 +599,7 @@ export class RuntimeAgentSupervisor {
       execution.sessionId = result.sessionId;
       execution.nativeRunId = result.nativeRunId;
       execution.responseText = result.responseText;
+      if (result.reasoningText) execution.reasoningText = result.reasoningText;
       execution.artifacts = await collectArtifacts(execution.outputDir);
       if (execution.skill) {
         if (!execution.artifacts.some((artifact) => artifact.name === "manifest.json")) {
