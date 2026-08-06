@@ -22,7 +22,7 @@ import { SupervisorStore } from "./store.js";
 import { assertPathWithin, ensureDir, errorMessage, newId, nowIso, SupervisorError } from "./util.js";
 
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
-export const SUPERVISOR_VERSION = "0.3.0";
+export const SUPERVISOR_VERSION = "0.4.0";
 export const PROTOCOL_VERSION = 1;
 
 export class RuntimeAgentSupervisor {

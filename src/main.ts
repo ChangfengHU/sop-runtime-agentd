@@ -1,3 +1,4 @@
+import { ClaudeCodeAdapter } from "./adapters/claude-code-adapter.js";
 import { PiAdapter } from "./adapters/pi-adapter.js";
 import { loadConfig } from "./config.js";
 import { CredentialResolver } from "./credentials.js";
@@ -18,6 +19,7 @@ const credentials = new CredentialResolver(config.credentialDir);
 const providers = new ProviderRegistry(config.providerDir);
 const supervisor = new RuntimeAgentSupervisor(config, store, events, providers, [
   new PiAdapter({ credentialResolver: credentials, dataDir: config.dataDir }),
+  new ClaudeCodeAdapter(),
 ]);
 const recovered = supervisor.recover();
 const server = createHttpServer(supervisor);
