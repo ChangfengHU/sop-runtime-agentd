@@ -1,3 +1,4 @@
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -7,23 +8,53 @@ import {
   createExecutionSchema,
   createSessionSchema,
   createTurnSchema,
+  createWebhookSchema,
   resolveApprovalSchema,
   setSessionProviderSchema,
+  setWebhookEnabledSchema,
   steerExecutionSchema,
   type AgentRuntimeAdapter,
   type CreateExecutionInput,
   type ExecutionRecord,
+  type PublicWebhookRecord,
   type RuntimeEvent,
   type SessionRecord,
+  type WebhookRecord,
 } from "./contracts.js";
 import { EventHub } from "./event-hub.js";
 import { ProviderRegistry } from "./providers.js";
 import { SupervisorStore } from "./store.js";
-import { assertPathWithin, ensureDir, errorMessage, newId, nowIso, SupervisorError } from "./util.js";
+import {
+  assertPathWithin,
+  ensureDir,
+  errorMessage,
+  newId,
+  nowIso,
+  SupervisorError,
+  WebhookRateLimitError,
+} from "./util.js";
 
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
-export const SUPERVISOR_VERSION = "0.4.0";
+export const SUPERVISOR_VERSION = "0.5.0";
 export const PROTOCOL_VERSION = 1;
+const WEBHOOK_PAYLOAD_TEMPLATE_MAX_CHARS = 8_000;
+
+function hashWebhookSecret(secret: string, id: string): string {
+  return createHash("sha256").update(`${secret}${id}`).digest("hex");
+}
+
+function webhookSecretMatches(storedHashHex: string, id: string, secret: string): boolean {
+  if (!secret) return false;
+  const candidate = Buffer.from(hashWebhookSecret(secret, id), "hex");
+  const stored = Buffer.from(storedHashHex, "hex");
+  if (candidate.length !== stored.length) return false;
+  return timingSafeEqual(candidate, stored);
+}
+
+function toPublicWebhook(webhook: WebhookRecord): PublicWebhookRecord {
+  const { secretHash: _secretHash, ...rest } = webhook;
+  return rest;
+}
 
 export class RuntimeAgentSupervisor {
   private readonly adapters = new Map<string, AgentRuntimeAdapter>();
@@ -172,6 +203,131 @@ export class RuntimeAgentSupervisor {
       { oldProviderId, newProviderId: session.providerId, deferred },
     );
     return { session, deferred };
+  }
+
+  async listWebhooks(): Promise<PublicWebhookRecord[]> {
+    return this.store.listWebhooks().map(toPublicWebhook);
+  }
+
+  async createWebhook(rawInput: unknown): Promise<{ webhook: PublicWebhookRecord; secret: string }> {
+    const input = createWebhookSchema.parse(rawInput);
+    if (!this.adapters.has(input.engine)) {
+      throw new SupervisorError(`Agent engine ${input.engine} is not installed in this Runtime Supervisor`, 409);
+    }
+    if (input.engine === "sop-native") {
+      const provider = input.providerId ? await this.providers.get(input.providerId) : undefined;
+      if (!provider) {
+        throw new Error(`Provider Profile ${input.providerId || "<missing>"} is not configured`);
+      }
+    }
+    const workspace = path.resolve(input.workspace);
+    const stat = await fs.stat(workspace);
+    if (!stat.isDirectory()) throw new Error("workspace must be a directory");
+    if (this.store.getWebhookByName(input.name)) {
+      throw new SupervisorError(`Webhook name ${input.name} already exists`, 409);
+    }
+    const id = `wh-${randomBytes(4).toString("hex")}`;
+    const secret = randomBytes(32).toString("base64url");
+    const timestamp = nowIso();
+    const webhook: WebhookRecord = {
+      id,
+      name: input.name,
+      description: input.description,
+      enabled: true,
+      engine: input.engine,
+      providerId: input.providerId ?? "",
+      workspace,
+      instructionTemplate: input.instructionTemplate,
+      secretHash: hashWebhookSecret(secret, id),
+      minIntervalMs: input.minIntervalMs,
+      target: input.target,
+      sessionId: "",
+      createdAt: timestamp,
+      lastTriggeredAt: "",
+      triggerCount: 0,
+    };
+    this.store.createWebhook(webhook);
+    return { webhook: toPublicWebhook(webhook), secret };
+  }
+
+  async setWebhookEnabled(id: string, rawInput: unknown): Promise<{ webhook: PublicWebhookRecord }> {
+    const input = setWebhookEnabledSchema.parse(rawInput);
+    const webhook = this.requiredWebhook(id);
+    webhook.enabled = input.enabled;
+    this.store.saveWebhook(webhook);
+    return { webhook: toPublicWebhook(webhook) };
+  }
+
+  async deleteWebhook(id: string): Promise<void> {
+    this.requiredWebhook(id);
+    this.store.deleteWebhook(id);
+  }
+
+  async triggerWebhook(
+    id: string,
+    input: { secret: string; payload: unknown; headers: Record<string, string> },
+  ): Promise<{ executionId: string; sessionId: string }> {
+    const webhook = this.store.getWebhook(id);
+    const storedHashHex = webhook?.secretHash ?? "0".repeat(64);
+    if (!webhook || !webhookSecretMatches(storedHashHex, id, input.secret)) {
+      throw new SupervisorError("Invalid webhook credentials", 401);
+    }
+    if (!webhook.enabled) {
+      throw new SupervisorError(`Webhook ${webhook.name} is disabled`, 403);
+    }
+    if (webhook.target !== "session") {
+      throw new SupervisorError(`webhook 目标 ${webhook.target} 尚未实现,当前仅支持 session`, 501);
+    }
+    const now = Date.now();
+    const lastTriggeredAtMs = webhook.lastTriggeredAt ? Date.parse(webhook.lastTriggeredAt) : 0;
+    const elapsedMs = now - lastTriggeredAtMs;
+    if (lastTriggeredAtMs && elapsedMs < webhook.minIntervalMs) {
+      throw new WebhookRateLimitError(webhook.minIntervalMs - elapsedMs);
+    }
+
+    let session = webhook.sessionId ? this.store.getSession(webhook.sessionId) : undefined;
+    if (!session || session.status === "closed") {
+      const created = await this.createSession({
+        instanceId: `webhook-${webhook.id}`,
+        engine: webhook.engine,
+        workspace: webhook.workspace,
+        ...(webhook.providerId ? { providerId: webhook.providerId } : {}),
+        title: `webhook: ${webhook.name}`,
+      });
+      session = created.session;
+    }
+
+    const payloadJson = JSON.stringify(input.payload ?? {}).slice(0, WEBHOOK_PAYLOAD_TEMPLATE_MAX_CHARS);
+    const headersJson = JSON.stringify(input.headers ?? {});
+    // 单趟替换:顺序替换会让先注入的内容里的 `{{headers}}` 字面量被二次展开——payload 是外部
+    // 可控的,不能让它influence后续占位符的解析。
+    const placeholderValues: Record<string, string> = { payload: payloadJson, headers: headersJson };
+    const instruction = webhook.instructionTemplate.replace(
+      /\{\{(payload|headers)\}\}/gu,
+      (_match, key: string) => placeholderValues[key] ?? "",
+    );
+
+    const { execution } = await this.createTurn(session.id, { instruction });
+
+    webhook.sessionId = session.id;
+    webhook.lastTriggeredAt = nowIso();
+    webhook.triggerCount += 1;
+    this.store.saveWebhook(webhook);
+
+    const payloadBytes = Buffer.byteLength(JSON.stringify(input.payload ?? {}), "utf8");
+    const stored = this.store.appendEvent({
+      executionId: execution.id,
+      type: "webhook.triggered",
+      status: execution.status,
+      producer: "runtime-agent-supervisor",
+      subject: { kind: "webhook", id: webhook.id },
+      summary: `Webhook ${webhook.name} triggered`,
+      data: { name: webhook.name, executionId: execution.id, payloadBytes },
+      occurredAt: nowIso(),
+    });
+    this.events.publish(stored);
+
+    return { executionId: execution.id, sessionId: session.id };
   }
 
   async createTurn(
@@ -517,6 +673,12 @@ export class RuntimeAgentSupervisor {
     const session = this.store.getSession(id);
     if (!session) throw new SupervisorError(`Session ${id} was not found`, 404);
     return session;
+  }
+
+  private requiredWebhook(id: string): WebhookRecord {
+    const webhook = this.store.getWebhook(id);
+    if (!webhook) throw new SupervisorError(`Webhook ${id} was not found`, 404);
+    return webhook;
   }
 
   private syncSessionAfterTurn(execution: ExecutionRecord): void {

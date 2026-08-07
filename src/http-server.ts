@@ -3,7 +3,9 @@ import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
 
 import type { RuntimeAgentSupervisor } from "./supervisor.js";
-import { errorMessage, SupervisorError } from "./util.js";
+import { errorMessage, SupervisorError, WebhookRateLimitError } from "./util.js";
+
+const WEBHOOK_HEADER_ALLOWLIST = ["x-github-event", "x-event-type", "user-agent"];
 
 const JSON_LIMIT_BYTES = 2 * 1024 * 1024;
 
@@ -37,12 +39,40 @@ function authorized(request: IncomingMessage, token: string): boolean {
 export function createHttpServer(supervisor: RuntimeAgentSupervisor): http.Server {
   return http.createServer(async (request, response) => {
     try {
-      if (!authorized(request, supervisor.config.internalToken)) {
+      const url = new URL(request.url || "/", `http://${request.headers.host || "localhost"}`);
+      const method = request.method || "GET";
+      // POST /v1/hooks/:id is reached over the public internet and authenticates itself with
+      // its own per-webhook secret (X-Webhook-Secret / Authorization: Bearer), not the internal
+      // token that guards every other /v1 route.
+      const hookTriggerMatch = matches(url.pathname, /^\/v1\/hooks\/([^/]+)$/u);
+      const isPublicWebhookTrigger = method === "POST" && Boolean(hookTriggerMatch);
+      if (!isPublicWebhookTrigger && !authorized(request, supervisor.config.internalToken)) {
         json(response, 401, { error: "unauthorized" });
         return;
       }
-      const url = new URL(request.url || "/", `http://${request.headers.host || "localhost"}`);
-      const method = request.method || "GET";
+      if (isPublicWebhookTrigger) {
+        const secretHeader = request.headers["x-webhook-secret"];
+        const authHeader = request.headers.authorization;
+        let secret = "";
+        if (typeof secretHeader === "string" && secretHeader) {
+          secret = secretHeader;
+        } else if (typeof authHeader === "string" && authHeader.startsWith("Bearer ")) {
+          secret = authHeader.slice("Bearer ".length);
+        }
+        const headers: Record<string, string> = {};
+        for (const key of WEBHOOK_HEADER_ALLOWLIST) {
+          const value = request.headers[key];
+          if (typeof value === "string" && value) headers[key] = value;
+        }
+        const payload = await readJson(request);
+        const result = await supervisor.triggerWebhook(decodeURIComponent(hookTriggerMatch![1] || ""), {
+          secret,
+          payload,
+          headers,
+        });
+        json(response, 202, result);
+        return;
+      }
       if (method === "GET" && url.pathname === "/health") {
         json(response, 200, supervisor.healthSnapshot());
         return;
@@ -114,6 +144,30 @@ export function createHttpServer(supervisor: RuntimeAgentSupervisor): http.Serve
         const session = supervisor.getSession(decodeURIComponent(sessionMatch[1] || ""));
         if (!session) json(response, 404, { error: "not_found" });
         else json(response, 200, { session });
+        return;
+      }
+      if (method === "GET" && url.pathname === "/v1/webhooks") {
+        json(response, 200, { webhooks: await supervisor.listWebhooks() });
+        return;
+      }
+      if (method === "POST" && url.pathname === "/v1/webhooks") {
+        const result = await supervisor.createWebhook(await readJson(request));
+        json(response, 201, result);
+        return;
+      }
+      const webhookEnabledMatch = matches(url.pathname, /^\/v1\/webhooks\/([^/]+)\/enabled$/u);
+      if (method === "POST" && webhookEnabledMatch) {
+        json(
+          response,
+          200,
+          await supervisor.setWebhookEnabled(decodeURIComponent(webhookEnabledMatch[1] || ""), await readJson(request)),
+        );
+        return;
+      }
+      const webhookMatch = matches(url.pathname, /^\/v1\/webhooks\/([^/]+)$/u);
+      if (method === "DELETE" && webhookMatch) {
+        await supervisor.deleteWebhook(decodeURIComponent(webhookMatch[1] || ""));
+        json(response, 200, { ok: true });
         return;
       }
       if (method === "POST" && url.pathname === "/v1/executions") {
@@ -254,6 +308,10 @@ export function createHttpServer(supervisor: RuntimeAgentSupervisor): http.Serve
       }
       json(response, 404, { error: "not_found" });
     } catch (error) {
+      if (error instanceof WebhookRateLimitError) {
+        json(response, 429, { error: "rate_limited", message: error.message, retryAfterMs: error.retryAfterMs });
+        return;
+      }
       const status = error instanceof SupervisorError ? error.httpStatus : 400;
       json(response, status, { error: "request_failed", message: errorMessage(error) });
     }

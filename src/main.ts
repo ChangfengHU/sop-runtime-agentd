@@ -18,7 +18,7 @@ const events = new EventHub();
 const credentials = new CredentialResolver(config.credentialDir);
 const providers = new ProviderRegistry(config.providerDir);
 const supervisor = new RuntimeAgentSupervisor(config, store, events, providers, [
-  new PiAdapter({ credentialResolver: credentials, dataDir: config.dataDir }),
+  new PiAdapter({ credentialResolver: credentials, providers, dataDir: config.dataDir }),
   new ClaudeCodeAdapter(),
 ]);
 const recovered = supervisor.recover();

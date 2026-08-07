@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 
@@ -31,6 +32,32 @@ async function resolveClaudeExecutable(): Promise<string> {
   throw new Error("claude CLI 未安装或不在 PATH(需 ≥2.x 并完成认证)");
 }
 
+// `claude --version` only prints a version banner and exits; it makes no model call and
+// costs nothing, unlike `claude -p`.
+async function readClaudeVersion(executablePath: string): Promise<string> {
+  return await new Promise((resolve, reject) => {
+    const child = spawn(executablePath, ["--version"], { stdio: ["ignore", "pipe", "ignore"] });
+    let stdout = "";
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error("claude --version timed out after 5s"));
+    }, 5_000);
+    timer.unref();
+    child.stdout?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.once("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.once("exit", () => {
+      clearTimeout(timer);
+      resolve(stdout.split("\n")[0]?.trim() ?? "");
+    });
+  });
+}
+
 export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
   readonly id = "claude-code" as const;
   readonly displayName = "Claude Code";
@@ -52,12 +79,49 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
   }
 
   async probe(): Promise<{ ok: boolean; detail: Record<string, unknown>; reason: string }> {
+    let executablePath = "";
+    let installed = true;
+    let installError = "";
     try {
-      const executablePath = await resolveClaudeExecutable();
-      return { ok: true, detail: { adapter: this.id, executablePath }, reason: "" };
+      executablePath = await resolveClaudeExecutable();
     } catch (error) {
-      return { ok: false, detail: { adapter: this.id }, reason: errorMessage(error) };
+      installed = false;
+      installError = errorMessage(error);
     }
+    const detail: Record<string, unknown> = { adapter: this.id, installed };
+    if (executablePath) detail.executablePath = executablePath;
+
+    if (installed) {
+      try {
+        const version = await readClaudeVersion(executablePath);
+        if (version) detail.version = version;
+      } catch {
+        // Version banner failed to read; authentication check below still runs and the
+        // caller can see version is absent from detail.
+      }
+    }
+
+    // Lightweight auth probe: never spend model tokens (no `claude -p`) to answer "is this
+    // authenticated". A local session file or an env var is a strong enough signal.
+    const credentialsPath = path.join(os.homedir(), ".claude", ".credentials.json");
+    let hasCredentialsFile = false;
+    try {
+      await fs.access(credentialsPath, fsConstants.F_OK);
+      hasCredentialsFile = true;
+    } catch {
+      hasCredentialsFile = false;
+    }
+    const hasApiKeyEnv = Boolean(process.env.ANTHROPIC_API_KEY);
+    const authenticated = hasCredentialsFile || hasApiKeyEnv;
+    detail.authenticated = authenticated;
+
+    let reason = "";
+    if (!installed) {
+      reason = installError;
+    } else if (!authenticated) {
+      reason = "未登录且未配置 ANTHROPIC_API_KEY";
+    }
+    return { ok: installed && authenticated, detail, reason };
   }
 
   async run(context: AdapterRunContext): Promise<AdapterRunResult> {

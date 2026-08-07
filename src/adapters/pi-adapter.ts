@@ -9,11 +9,13 @@ import type {
   AgentRuntimeAdapter,
 } from "../contracts.js";
 import { CredentialResolver } from "../credentials.js";
-import { SupervisorError } from "../util.js";
+import type { ProviderRegistry } from "../providers.js";
+import { errorMessage, SupervisorError } from "../util.js";
 import type { PiWorkerInput, PiWorkerMessage } from "./pi-protocol.js";
 
 export interface PiAdapterOptions {
   credentialResolver: CredentialResolver;
+  providers: ProviderRegistry;
   dataDir: string;
   agentDir?: string;
 }
@@ -42,16 +44,34 @@ export class PiAdapter implements AgentRuntimeAdapter {
 
   async probe(): Promise<{ ok: boolean; detail: Record<string, unknown>; reason: string }> {
     const workerPath = fileURLToPath(new URL("../workers/pi-worker.js", import.meta.url));
-    return {
-      ok: true,
-      detail: {
-        adapter: this.id,
-        workerPath,
-        isolatedProcess: true,
-        sdk: "@earendil-works/pi-coding-agent",
-      },
-      reason: "",
+    const detail: Record<string, unknown> = {
+      adapter: this.id,
+      installed: true,
+      workerPath,
+      isolatedProcess: true,
+      sdk: "@earendil-works/pi-coding-agent",
     };
+    const profiles = await this.options.providers.list();
+    if (profiles.length === 0) {
+      const reason = "没有配置任何 Provider Profile";
+      return { ok: false, detail: { ...detail, authenticated: false, note: reason }, reason };
+    }
+    const first = profiles[0]!;
+    detail.defaultModel = first.model;
+    const profile = await this.options.providers.get(first.id);
+    if (!profile) {
+      const reason = `Provider Profile ${first.id} 无法读取`;
+      return { ok: false, detail: { ...detail, authenticated: false, note: reason }, reason };
+    }
+    try {
+      // Only resolve to prove the credential is reachable; the value itself is never
+      // logged, stored in detail, or returned to the caller.
+      await this.options.credentialResolver.resolve(profile.credentialRef);
+      return { ok: true, detail: { ...detail, authenticated: true }, reason: "" };
+    } catch (error) {
+      const reason = `provider profile ${first.id} 的凭据解析失败:${errorMessage(error)}`;
+      return { ok: false, detail: { ...detail, authenticated: false, note: reason }, reason };
+    }
   }
 
   async run(context: AdapterRunContext): Promise<AdapterRunResult> {

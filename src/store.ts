@@ -1,10 +1,18 @@
 import { DatabaseSync } from "node:sqlite";
 
-import type { ExecutionRecord, RuntimeEvent, SessionRecord } from "./contracts.js";
+import type { ExecutionRecord, RuntimeEvent, SessionRecord, WebhookRecord } from "./contracts.js";
 import { nowIso } from "./util.js";
 
 interface JsonRow {
   payload_json: string;
+}
+
+// 旧记录(0.5.0 之前写入)没有 target 字段,统一在反序列化处兜底为 "session",
+// 避免在每个调用点各自判断。
+function deserializeWebhook(json: string): WebhookRecord {
+  const record = JSON.parse(json) as WebhookRecord;
+  if (!record.target) record.target = "session";
+  return record;
 }
 
 interface EventRow {
@@ -64,6 +72,16 @@ export class SupervisorStore {
       );
       CREATE INDEX IF NOT EXISTS idx_sessions_instance_created
         ON sessions(instance_id, created_at DESC);
+
+      CREATE TABLE IF NOT EXISTS webhooks (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        payload_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_webhooks_created
+        ON webhooks(created_at DESC);
     `);
     this.migrateRuntimeEventsForeignKey();
     this.ensureExecutionSessionColumn();
@@ -257,6 +275,52 @@ export class SupervisorStore {
       .prepare("SELECT status, COUNT(*) AS count FROM sessions GROUP BY status")
       .all() as unknown as Array<{ status: string; count: number }>;
     return Object.fromEntries(rows.map((row) => [row.status, Number(row.count)]));
+  }
+
+  createWebhook(webhook: WebhookRecord): WebhookRecord {
+    this.database
+      .prepare(`
+        INSERT INTO webhooks (id, name, payload_json, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+      `)
+      .run(webhook.id, webhook.name, JSON.stringify(webhook), webhook.createdAt, webhook.createdAt);
+    return webhook;
+  }
+
+  saveWebhook(webhook: WebhookRecord): WebhookRecord {
+    const result = this.database
+      .prepare("UPDATE webhooks SET name = ?, payload_json = ?, updated_at = ? WHERE id = ?")
+      .run(webhook.name, JSON.stringify(webhook), nowIso(), webhook.id);
+    if (result.changes !== 1) {
+      throw new Error(`Webhook ${webhook.id} does not exist`);
+    }
+    return webhook;
+  }
+
+  getWebhook(id: string): WebhookRecord | undefined {
+    const row = this.database
+      .prepare("SELECT payload_json FROM webhooks WHERE id = ?")
+      .get(id) as JsonRow | undefined;
+    return row ? deserializeWebhook(row.payload_json) : undefined;
+  }
+
+  getWebhookByName(name: string): WebhookRecord | undefined {
+    const row = this.database
+      .prepare("SELECT payload_json FROM webhooks WHERE name = ?")
+      .get(name) as JsonRow | undefined;
+    return row ? deserializeWebhook(row.payload_json) : undefined;
+  }
+
+  listWebhooks(): WebhookRecord[] {
+    const rows = this.database
+      .prepare("SELECT payload_json FROM webhooks ORDER BY created_at DESC")
+      .all() as unknown as JsonRow[];
+    return rows.map((row) => deserializeWebhook(row.payload_json));
+  }
+
+  deleteWebhook(id: string): boolean {
+    const result = this.database.prepare("DELETE FROM webhooks WHERE id = ?").run(id);
+    return result.changes === 1;
   }
 
   appendEvent(event: Omit<RuntimeEvent, "id">): RuntimeEvent {

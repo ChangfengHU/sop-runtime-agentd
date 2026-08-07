@@ -42,3 +42,10 @@ export class SupervisorError extends Error {
     this.name = "SupervisorError";
   }
 }
+
+export class WebhookRateLimitError extends SupervisorError {
+  constructor(readonly retryAfterMs: number) {
+    super(`Webhook was triggered too recently; retry after ${retryAfterMs}ms`, 429);
+    this.name = "WebhookRateLimitError";
+  }
+}

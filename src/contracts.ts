@@ -102,6 +102,49 @@ export const resolveApprovalSchema = z.object({
   note: z.string().default(""),
 });
 
+// webhook 触发后落点的类型域。目前只实现 session(往会话里追加一轮);
+// task(看板任务)与 workflow-run 是已规划落点,先占住取值域,触发时会返回 501。
+export const webhookTargetSchema = z.enum(["session", "task", "workflow-run"]);
+
+export type WebhookTarget = z.infer<typeof webhookTargetSchema>;
+
+export const createWebhookSchema = z.object({
+  name: z.string().min(1),
+  description: z.string().default(""),
+  engine: engineIdSchema,
+  providerId: z.string().min(1).optional(),
+  workspace: z.string().min(1),
+  instructionTemplate: z.string().min(1),
+  minIntervalMs: z.number().int().min(0).default(3000),
+  target: webhookTargetSchema.default("session"),
+});
+
+export type CreateWebhookInput = z.infer<typeof createWebhookSchema>;
+
+export const setWebhookEnabledSchema = z.object({
+  enabled: z.boolean(),
+});
+
+export interface WebhookRecord {
+  id: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  engine: EngineId;
+  providerId: string;
+  workspace: string;
+  instructionTemplate: string;
+  secretHash: string;
+  minIntervalMs: number;
+  target: WebhookTarget;
+  sessionId: string;
+  createdAt: string;
+  lastTriggeredAt: string;
+  triggerCount: number;
+}
+
+export type PublicWebhookRecord = Omit<WebhookRecord, "secretHash">;
+
 export interface SessionRecord {
   id: string;
   requestId: string;
@@ -198,7 +241,7 @@ export interface RuntimeEvent<T = unknown> {
   status: ExecutionStatus | SessionStatus;
   producer: string;
   subject: {
-    kind: "execution" | "session" | "skill" | "model" | "tool" | "artifact" | "approval";
+    kind: "execution" | "session" | "skill" | "model" | "tool" | "artifact" | "approval" | "webhook";
     id: string;
   };
   summary: string;
