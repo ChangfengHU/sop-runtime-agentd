@@ -71,6 +71,8 @@ export const createSessionSchema = z.object({
   providerId: z.string().min(1).optional(),
   title: z.string().default(""),
   metadata: z.record(z.string(), z.unknown()).default({}),
+  // 可选:建会话时顺带发出第一轮,省掉客户端一次完整往返(隧道单程约 2s)
+  firstInstruction: z.string().min(1).optional(),
 });
 
 export type CreateSessionInput = z.infer<typeof createSessionSchema>;

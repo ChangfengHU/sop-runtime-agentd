@@ -5,11 +5,15 @@ import path from "node:path";
 
 import type { AdapterRunContext, AdapterRunResult, AgentCapabilities, AgentRuntimeAdapter } from "../contracts.js";
 import type { CredentialResolver } from "../credentials.js";
+import type { ProviderRegistry } from "../providers.js";
 import { errorMessage, newId } from "../util.js";
 
 // The headless profile reads its provider key straight from the launching environment
 // (dsh error text: "export DEEPSEEK_API_KEY in the launching environment").
 const DSH_CREDENTIAL_REF = process.env.DSH_CREDENTIAL_REF || "deepseek.key";
+// dsh 默认走 DeepSeek 官方路由;我们的 key 是 api-proxy 签发的,官方接口不认它,
+// 必须把 base url 指到同一个 provider profile 上(实测:只加 key 报 invalid,加 base url 才通)。
+const DSH_PROVIDER_ID = process.env.DSH_PROVIDER_ID || "deepseek";
 
 async function resolveDshExecutable(): Promise<string> {
   const dirs = (process.env.PATH || "").split(path.delimiter).filter(Boolean);
@@ -65,7 +69,19 @@ export class DshAdapter implements AgentRuntimeAdapter {
   readonly displayName = "DeepSeek Harness";
   private readonly active = new Map<string, ChildProcess>();
 
-  constructor(private readonly options: { credentialResolver: CredentialResolver }) {}
+  constructor(
+    private readonly options: { credentialResolver: CredentialResolver; providers: ProviderRegistry },
+  ) {}
+
+  /** 从 agentd 的 provider profile 取 base url,避免把网关地址写死在适配器里。 */
+  private async resolveBaseUrl(): Promise<string> {
+    try {
+      const profile = await this.options.providers.get(DSH_PROVIDER_ID);
+      return profile?.baseUrl || "";
+    } catch {
+      return "";
+    }
+  }
 
   capabilities(): AgentCapabilities {
     return {
@@ -130,13 +146,18 @@ export class DshAdapter implements AgentRuntimeAdapter {
     const { execution } = context;
     const executablePath = await resolveDshExecutable();
     const apiKey = await this.resolveApiKey();
+    const baseUrl = await this.resolveBaseUrl();
 
     const task = `${execution.instruction}\n\nWrite every business output under the output directory: ${execution.outputDir}`;
     const args = ["--profile", "headless", task];
 
     const child = spawn(executablePath, args, {
       cwd: execution.workspace,
-      env: { ...process.env, DEEPSEEK_API_KEY: apiKey },
+      env: {
+        ...process.env,
+        DEEPSEEK_API_KEY: apiKey,
+        ...(baseUrl ? { DEEPSEEK_BASE_URL: baseUrl } : {}),
+      },
       stdio: ["ignore", "pipe", "pipe"],
     });
     this.active.set(execution.id, child);

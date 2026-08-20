@@ -98,7 +98,9 @@ export class RuntimeAgentSupervisor {
     );
   }
 
-  async createSession(rawInput: unknown): Promise<{ session: SessionRecord; created: boolean }> {
+  async createSession(
+    rawInput: unknown,
+  ): Promise<{ session: SessionRecord; created: boolean; execution?: ExecutionRecord }> {
     if (this.closing) {
       throw new Error("Runtime Agent Supervisor is shutting down");
     }
@@ -146,6 +148,10 @@ export class RuntimeAgentSupervisor {
       instanceId: session.instanceId,
       workspace: session.workspace,
     });
+    if (input.firstInstruction) {
+      const first = await this.createTurn(session.id, { instruction: input.firstInstruction });
+      return { session: first.session, created: true, execution: first.execution };
+    }
     return { session, created: true };
   }
 

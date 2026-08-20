@@ -61,7 +61,7 @@ const supervisor = new RuntimeAgentSupervisor(config, store, events, providers, 
     },
   }),
   new OpenclawAdapter(),
-  new DshAdapter({ credentialResolver: credentials }),
+  new DshAdapter({ credentialResolver: credentials, providers }),
 ]);
 const recovered = supervisor.recover();
 const server = createHttpServer(supervisor);
