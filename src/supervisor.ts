@@ -139,6 +139,9 @@ export class RuntimeAgentSupervisor {
       metadata: { ...input.metadata },
     };
     this.store.createSession(session);
+    // 预热常驻引擎:不 await,失败也不影响会话创建——它只是把冷启动从第一轮挪到建会话时。
+    const adapter = this.adapters.get(session.engine);
+    void adapter?.warmup?.({ sessionId: session.id, workspace: session.workspace }).catch(() => {});
     await this.emitSessionEvent(session, "session.created", `${session.engine} session created`, {
       instanceId: session.instanceId,
       workspace: session.workspace,

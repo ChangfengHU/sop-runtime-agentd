@@ -6,6 +6,8 @@ export const engineIdSchema = z.enum([
   "claude-code",
   "hermes",
   "openclaw",
+  "deepseek-harness",
+  "opencode",
   "mastra",
 ]);
 
@@ -269,6 +271,8 @@ export interface AgentRuntimeAdapter {
   probe(): Promise<{ ok: boolean; detail: Record<string, unknown>; reason: string }>;
   run(context: AdapterRunContext): Promise<AdapterRunResult>;
   cancel?(executionId: string): Promise<void>;
+  /** 可选预热:会话创建时提前把常驻进程拉起来,让第一轮不必付冷启动(ACP 引擎用)。 */
+  warmup?(input: { sessionId: string; workspace: string }): Promise<void>;
   steer?(executionId: string, message: string): Promise<void>;
   resolveApproval?(
     executionId: string,
