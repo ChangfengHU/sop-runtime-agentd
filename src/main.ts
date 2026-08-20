@@ -1,5 +1,6 @@
 import { ClaudeCodeAdapter } from "./adapters/claude-code-adapter.js";
 import { CodexAdapter } from "./adapters/codex-adapter.js";
+import { HermesAdapter } from "./adapters/hermes-adapter.js";
 import { PiAdapter } from "./adapters/pi-adapter.js";
 import { loadConfig } from "./config.js";
 import { CredentialResolver } from "./credentials.js";
@@ -22,6 +23,7 @@ const supervisor = new RuntimeAgentSupervisor(config, store, events, providers, 
   new PiAdapter({ credentialResolver: credentials, providers, dataDir: config.dataDir }),
   new ClaudeCodeAdapter(),
   new CodexAdapter(),
+  new HermesAdapter(),
 ]);
 const recovered = supervisor.recover();
 const server = createHttpServer(supervisor);
