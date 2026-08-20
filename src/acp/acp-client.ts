@@ -24,7 +24,20 @@ export class AcpClient {
   private stderrTail = "";
   private onNotify: (event: AcpNotification) => void = () => {};
 
-  constructor(command: string, args: string[], options: { cwd: string; env: NodeJS.ProcessEnv }) {
+  /** 可选:接管 agent 的反向请求(不同协议的方法名不同,如 codex app-server 的审批类)。
+   *  返回 undefined 表示交回默认处理。 */
+  private readonly requestHandler: ((method: string, params: Record<string, unknown>) => unknown) | undefined;
+
+  constructor(
+    command: string,
+    args: string[],
+    options: {
+      cwd: string;
+      env: NodeJS.ProcessEnv;
+      onRequest?: (method: string, params: Record<string, unknown>) => unknown;
+    },
+  ) {
+    this.requestHandler = options.onRequest;
     this.child = spawn(command, args, { cwd: options.cwd, env: options.env, stdio: ["pipe", "pipe", "pipe"] });
     this.child.stderr?.setEncoding("utf8");
     this.child.stderr?.on("data", (chunk: string) => {
@@ -86,6 +99,13 @@ export class AcpClient {
    */
   private async answerAgentRequest(message: any): Promise<void> {
     const method = String(message.method || "");
+    if (this.requestHandler) {
+      const custom = this.requestHandler(method, (message.params || {}) as Record<string, unknown>);
+      if (custom !== undefined) {
+        this.send({ jsonrpc: "2.0", id: message.id, result: custom });
+        return;
+      }
+    }
     let result: unknown = {};
     if (method === "session/request_permission") {
       const options = Array.isArray(message.params?.options) ? message.params.options : [];

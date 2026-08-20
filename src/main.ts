@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { ClaudeCodeAdapter } from "./adapters/claude-code-adapter.js";
-import { CodexAdapter } from "./adapters/codex-adapter.js";
+import { CodexAppServerAdapter } from "./adapters/codex-app-server-adapter.js";
 import { AcpAdapter } from "./adapters/acp-adapter.js";
 import { DshAdapter } from "./adapters/dsh-adapter.js";
 import { OpenclawAdapter } from "./adapters/openclaw-adapter.js";
@@ -28,7 +28,7 @@ const providers = new ProviderRegistry(config.providerDir);
 const supervisor = new RuntimeAgentSupervisor(config, store, events, providers, [
   new PiAdapter({ credentialResolver: credentials, providers, dataDir: config.dataDir }),
   new ClaudeCodeAdapter(),
-  new CodexAdapter(),
+  new CodexAppServerAdapter(),
   // hermes / opencode 走 ACP 常驻:进程按会话复用,冷启动只付一次(hermes 单轮曾 ~56s)
   new AcpAdapter({
     id: "hermes",
