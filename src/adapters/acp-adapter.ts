@@ -19,6 +19,8 @@ const REASONING_TEXT_TRUNCATED_CHARS = 60_000;
 const IDLE_TTL_MS = Number(process.env.ACP_IDLE_TTL_MS || 20 * 60 * 1000);
 
 type ResidentAgent = { client: AcpClient; acpSessionId: string; lastUsed: number };
+/** 每个引擎只常驻一个进程,内部承载多个 ACP 会话——冷启动全局只付一次。 */
+type EngineProcess = { client: AcpClient; lastUsed: number };
 
 export interface AcpAdapterOptions {
   id: EngineId;
@@ -53,6 +55,13 @@ export class AcpAdapter implements AgentRuntimeAdapter {
   readonly id: EngineId;
   readonly displayName: string;
   private readonly resident = new Map<string, ResidentAgent>();
+  // 同一会话的启动只做一次:预热尚未完成时来的第一轮必须等它,
+  // 否则会并行再起一个进程,冷启动白付两次(实测 hermes 因此仍是 58s)。
+  private readonly starting = new Map<string, Promise<ResidentAgent>>();
+  private engineProcess: EngineProcess | null = null;
+  private engineStarting: Promise<EngineProcess> | null = null;
+  // 一个进程承载多个会话,通知必须按 ACP sessionId 分发到对应那一轮
+  private readonly listeners = new Map<string, (event: AcpNotification) => void>();
   private readonly running = new Map<string, { client: AcpClient; acpSessionId: string }>();
 
   constructor(private readonly options: AcpAdapterOptions) {
@@ -116,13 +125,87 @@ export class AcpAdapter implements AgentRuntimeAdapter {
     const now = Date.now();
     for (const [key, agent] of this.resident) {
       if (!agent.client.alive || now - agent.lastUsed > IDLE_TTL_MS) {
-        agent.client.kill();
+        this.listeners.delete(agent.acpSessionId);
         this.resident.delete(key);
+      }
+    }
+    // 进程是所有会话共享的,只有全空闲够久才回收(否则下一个会话又要付冷启动)
+    if (this.engineProcess && (!this.engineProcess.client.alive || now - this.engineProcess.lastUsed > IDLE_TTL_MS)) {
+      if (this.resident.size === 0) {
+        this.engineProcess.client.kill();
+        this.engineProcess = null;
       }
     }
   }
 
-  /** Starts (or reuses) a resident agent for this agentd session and returns its ACP session id. */
+  /** 拉起(或复用)该引擎的常驻进程:冷启动只在第一个会话时付一次。 */
+  private async ensureEngineProcess(workspace: string): Promise<EngineProcess> {
+    if (this.engineProcess?.client.alive) {
+      this.engineProcess.lastUsed = Date.now();
+      return this.engineProcess;
+    }
+    if (this.engineStarting) return await this.engineStarting;
+    const boot = (async (): Promise<EngineProcess> => {
+      const executablePath = await this.resolveExecutable();
+      const extraEnv = this.options.env ? await this.options.env() : {};
+      const client = new AcpClient(executablePath, this.options.args, {
+        cwd: workspace,
+        env: { ...process.env, ...extraEnv },
+      });
+      try {
+        await client.request("initialize", {
+          protocolVersion: 1,
+          clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } },
+        });
+      } catch (error) {
+        client.kill();
+        throw error;
+      }
+      // 一个总入口按 sessionId 分发,避免多会话互相覆盖回调
+      client.onNotification((event) => {
+        const sessionId = String((event.params as any)?.sessionId || "");
+        this.listeners.get(sessionId)?.(event);
+      });
+      const engine: EngineProcess = { client, lastUsed: Date.now() };
+      this.engineProcess = engine;
+      return engine;
+    })().finally(() => {
+      this.engineStarting = null;
+    });
+    this.engineStarting = boot;
+    return await boot;
+  }
+
+  /** 在常驻进程里开(或恢复)一个 ACP 会话。 */
+  private async start(key: string, workspace: string, resumeSessionId = ""): Promise<ResidentAgent> {
+    const engine = await this.ensureEngineProcess(workspace);
+    const client = engine.client;
+    let acpSessionId = "";
+    // 重连丢失的会话(agentd 重启过):先试 session/load,不行再开新会话。
+    if (resumeSessionId) {
+      try {
+        const loaded = await client.request<any>("session/load", {
+          sessionId: resumeSessionId,
+          cwd: workspace,
+          mcpServers: [],
+        });
+        acpSessionId = String(loaded?.sessionId || resumeSessionId);
+      } catch {
+        acpSessionId = "";
+      }
+    }
+    if (!acpSessionId) {
+      const created = await client.request<any>("session/new", { cwd: workspace, mcpServers: [] });
+      acpSessionId = String(created?.sessionId || "");
+      if (!acpSessionId) throw new Error("ACP session/new 未返回 sessionId");
+    }
+    const agent: ResidentAgent = { client, acpSessionId, lastUsed: Date.now() };
+    this.resident.set(key, agent);
+    engine.lastUsed = Date.now();
+    return agent;
+  }
+
+  /** 取得该会话的常驻 agent:已在跑就复用,正在启动就等它,都没有才新建。 */
   private async acquire(context: AdapterRunContext): Promise<ResidentAgent> {
     this.sweepIdle();
     const { execution } = context;
@@ -132,67 +215,24 @@ export class AcpAdapter implements AgentRuntimeAdapter {
       existing.lastUsed = Date.now();
       return existing;
     }
-
-    const executablePath = await this.resolveExecutable();
-    const extraEnv = this.options.env ? await this.options.env() : {};
-    const client = new AcpClient(executablePath, this.options.args, {
-      cwd: execution.workspace,
-      env: { ...process.env, ...extraEnv },
-    });
-
-    await client.request("initialize", {
-      protocolVersion: 1,
-      clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } },
-    });
-
-    let acpSessionId = "";
-    // Reconnecting to a session we lost (agentd restart): try loadSession first, fall back to new.
-    if (execution.sessionPolicy === "resume" && execution.sessionId) {
-      try {
-        const loaded = await client.request<any>("session/load", {
-          sessionId: execution.sessionId,
-          cwd: execution.workspace,
-          mcpServers: [],
-        });
-        acpSessionId = String(loaded?.sessionId || execution.sessionId);
-      } catch {
-        acpSessionId = "";
-      }
-    }
-    if (!acpSessionId) {
-      const created = await client.request<any>("session/new", { cwd: execution.workspace, mcpServers: [] });
-      acpSessionId = String(created?.sessionId || "");
-      if (!acpSessionId) throw new Error("ACP session/new 未返回 sessionId");
-    }
-
-    const agent: ResidentAgent = { client, acpSessionId, lastUsed: Date.now() };
-    this.resident.set(key, agent);
-    return agent;
+    const inflight = this.starting.get(key);
+    if (inflight) return await inflight;
+    const resumeId = execution.sessionPolicy === "resume" ? execution.sessionId || "" : "";
+    const pending = this.start(key, execution.workspace, resumeId).finally(() => this.starting.delete(key));
+    this.starting.set(key, pending);
+    return await pending;
   }
 
   /** 会话创建时提前拉起常驻进程:hermes 冷启动约 60s,预热后第一轮直接进入模型时间。 */
   async warmup(input: { sessionId: string; workspace: string }): Promise<void> {
     this.sweepIdle();
     if (this.resident.get(input.sessionId)?.client.alive) return;
-    const executablePath = await this.resolveExecutable();
-    const extraEnv = this.options.env ? await this.options.env() : {};
-    const client = new AcpClient(executablePath, this.options.args, {
-      cwd: input.workspace,
-      env: { ...process.env, ...extraEnv },
-    });
-    try {
-      await client.request("initialize", {
-        protocolVersion: 1,
-        clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } },
-      });
-      const created = await client.request<any>("session/new", { cwd: input.workspace, mcpServers: [] });
-      const acpSessionId = String(created?.sessionId || "");
-      if (!acpSessionId) throw new Error("ACP session/new 未返回 sessionId");
-      this.resident.set(input.sessionId, { client, acpSessionId, lastUsed: Date.now() });
-    } catch (error) {
-      client.kill();
-      throw error;
-    }
+    if (this.starting.has(input.sessionId)) return;
+    const pending = this.start(input.sessionId, input.workspace).finally(() =>
+      this.starting.delete(input.sessionId),
+    );
+    this.starting.set(input.sessionId, pending);
+    await pending;
   }
 
   async run(context: AdapterRunContext): Promise<AdapterRunResult> {
@@ -269,7 +309,7 @@ export class AcpAdapter implements AgentRuntimeAdapter {
         );
       }
     };
-    agent.client.onNotification(handle);
+    this.listeners.set(agent.acpSessionId, handle);
 
     await context.emit({
       type: "agent.turn.started",
@@ -322,7 +362,7 @@ export class AcpAdapter implements AgentRuntimeAdapter {
     } finally {
       context.signal.removeEventListener("abort", onAbort);
       this.running.delete(execution.id);
-      agent.client.onNotification(() => {});
+      this.listeners.delete(agent.acpSessionId);
     }
   }
 
