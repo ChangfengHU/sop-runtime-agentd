@@ -333,6 +333,16 @@ export class AcpAdapter implements AgentRuntimeAdapter {
         prompt: [{ type: "text", text: prompt }],
       });
       await emitChain;
+      // 有的 agent(实测 opencode)把 agent_message 通知排在 session/prompt 响应之后:
+      // 响应一回来就判定会得到"无文本",而那段文本会迟到并被算进下一轮(实测下一轮返回 "42 142")。
+      // 因此文本为空时给一个收尾窗口,等通知落地再判。
+      if (!responseText.trim()) {
+        const deadline = Date.now() + 10_000;
+        while (!responseText.trim() && Date.now() < deadline) {
+          await new Promise((resolve) => setTimeout(resolve, 200));
+        }
+        await emitChain;
+      }
       const stopReason = String(result?.stopReason || "");
       if (stopReason === "cancelled") throw new Error(`${this.displayName} turn was cancelled`);
       if (!responseText.trim()) {

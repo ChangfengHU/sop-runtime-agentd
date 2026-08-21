@@ -69,7 +69,9 @@ export function extractOpenclawAnswer(stdout: string): { responseText: string; m
     return { responseText: trimmed, meta: {} };
   }
   if (!isRecord(parsed)) return { responseText: trimmed, meta: {} };
-  const meta = isRecord(parsed.meta) ? parsed.meta : {};
+  // --local 的结果在顶层 meta;走 gateway 时包了一层 result(实测 2026-08-21)
+  const envelope = isRecord(parsed.result) ? parsed.result : parsed;
+  const meta = isRecord(envelope.meta) ? envelope.meta : {};
   const responseText =
     (typeof meta.finalAssistantVisibleText === "string" && meta.finalAssistantVisibleText) ||
     (typeof meta.finalAssistantRawText === "string" && meta.finalAssistantRawText) ||
@@ -171,8 +173,8 @@ export class OpenclawAdapter implements AgentRuntimeAdapter {
       "agent",
       "--agent",
       OPENCLAW_AGENT_ID,
-      // --local runs the embedded agent: no gateway pairing, credentials come from the config.
-      "--local",
+      // 走常驻 gateway(不加 --local):实测引擎侧 15-25s → 2.7s,内嵌 runner 每轮都要重建。
+      // gateway 不可用时由调用方看到明确错误,而不是悄悄退回慢路径。
       "--json",
       "--session-key",
       sessionKey,

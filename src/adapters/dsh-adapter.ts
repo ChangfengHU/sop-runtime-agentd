@@ -142,7 +142,24 @@ export class DshAdapter implements AgentRuntimeAdapter {
     return { ok: installed && authenticated, detail, reason };
   }
 
+  /** 上游网关偶发 502/504,单次失败就判整轮失败太脆;这类瞬时错误退避重试。 */
+  private static isTransient(message: string): boolean {
+    return /HTTP (429|500|502|503|504)/.test(message) || /timed out|ECONNRESET/i.test(message);
+  }
+
   async run(context: AdapterRunContext): Promise<AdapterRunResult> {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await this.runOnce(context);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (attempt >= 2 || context.signal.aborted || !DshAdapter.isTransient(message)) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 2_000 * (attempt + 1)));
+      }
+    }
+  }
+
+  private async runOnce(context: AdapterRunContext): Promise<AdapterRunResult> {
     const { execution } = context;
     const executablePath = await resolveDshExecutable();
     const apiKey = await this.resolveApiKey();
@@ -161,6 +178,13 @@ export class DshAdapter implements AgentRuntimeAdapter {
       stdio: ["ignore", "pipe", "pipe"],
     });
     this.active.set(execution.id, child);
+    // 上游 504 会把单次调用拖到两分钟以上,再叠加重试就是几百秒。给一个硬超时,
+    // 超时按瞬时错误处理(会被 isTransient 命中并退避重试),避免长尾。
+    const hardTimeoutMs = Number(process.env.DSH_TURN_TIMEOUT_MS || 90_000);
+    const hardTimer = setTimeout(() => {
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    }, hardTimeoutMs);
+    hardTimer.unref();
 
     const modelSubject = execution.provider?.model ?? "deepseek-harness";
     let stdout = "";
@@ -188,6 +212,7 @@ export class DshAdapter implements AgentRuntimeAdapter {
       const settle = (callback: () => void): void => {
         if (settled) return;
         settled = true;
+        clearTimeout(hardTimer);
         this.active.delete(execution.id);
         context.signal.removeEventListener("abort", onAbort);
         callback();
@@ -210,6 +235,10 @@ export class DshAdapter implements AgentRuntimeAdapter {
           return;
         }
         const responseText = stdout.trim();
+        if (signal === "SIGKILL" && !responseText) {
+          settle(() => reject(new Error(`DeepSeek Harness turn timed out after ${Math.round(hardTimeoutMs / 1000)}s`)));
+          return;
+        }
         if (code !== 0) {
           const detail = stderrTail ? `: ${stderrTail}` : "";
           settle(() =>
