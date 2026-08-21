@@ -255,6 +255,9 @@ export interface RuntimeEvent<T = unknown> {
 
 export interface AdapterRunContext {
   execution: ExecutionRecord;
+  /** 同会话的历史轮次(仅对 persistentSessions=false 的引擎提供:它们每轮都是全新进程,
+   *  拿不到上下文就会去翻工作目录猜、或直接编造答案)。按时间正序。 */
+  history: Array<{ instruction: string; responseText: string }>;
   signal: AbortSignal;
   emit: (event: Omit<RuntimeEvent, "id" | "executionId" | "occurredAt">) => Promise<RuntimeEvent>;
 }

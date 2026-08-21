@@ -784,8 +784,19 @@ export class RuntimeAgentSupervisor {
         summary: `${adapter.displayName} started`,
         data: { adapter: adapter.id, sessionId: execution.sessionId },
       });
+      // 无会话引擎(如 dsh headless)每轮都是新进程,由我们把同会话的历史补给它
+      let history: Array<{ instruction: string; responseText: string }> = [];
+      if (execution.sessionRef && adapter.capabilities().persistentSessions === false) {
+        history = this.store
+          .listExecutionsBySession(execution.sessionRef, 12)
+          // store 已按 created_at ASC 返回,不能再 reverse:翻反后模型会把最早一轮当成最近一轮
+          // (实测第3轮拿第1轮的 42 去除以 2,答成 21 而不是 71)
+          .filter((row: ExecutionRecord) => row.id !== execution.id && row.status === "completed" && Boolean(row.responseText))
+          .map((row: ExecutionRecord) => ({ instruction: row.instruction, responseText: row.responseText }));
+      }
       const result = await adapter.run({
         execution,
+        history,
         signal: controller.signal,
         emit: async (event) => await this.emit(execution, event),
       });

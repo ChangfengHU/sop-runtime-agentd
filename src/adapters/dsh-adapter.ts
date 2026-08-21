@@ -153,7 +153,9 @@ export class DshAdapter implements AgentRuntimeAdapter {
         return await this.runOnce(context);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        if (attempt >= 2 || context.signal.aborted || !DshAdapter.isTransient(message)) throw error;
+        // 正常一轮 5-22s(实测);超时 45s + 最多一次重试,最坏约 95s。
+        // 之前 90s×3 次会把一次异常放大成 264s。
+        if (attempt >= 1 || context.signal.aborted || !DshAdapter.isTransient(message)) throw error;
         await new Promise((resolve) => setTimeout(resolve, 2_000 * (attempt + 1)));
       }
     }
@@ -165,7 +167,16 @@ export class DshAdapter implements AgentRuntimeAdapter {
     const apiKey = await this.resolveApiKey();
     const baseUrl = await this.resolveBaseUrl();
 
-    const task = `${execution.instruction}\n\nWrite every business output under the output directory: ${execution.outputDir}`;
+    // headless profile 无会话,历史必须显式带上,否则它会去翻工作目录猜上下文
+    // (实测:问"刚才那个数"时会编出 271/371,或直接耗到超时)
+    const transcript = context.history
+      .map((turn, index) => `第${index + 1}轮\n用户:${turn.instruction}\n你的回答:${turn.responseText}`)
+      .join("\n\n");
+    const task = [
+      transcript ? `以下是本次会话此前的对话记录,请据此理解上下文:\n\n${transcript}\n\n---\n` : "",
+      execution.instruction,
+      `\n\nWrite every business output under the output directory: ${execution.outputDir}`,
+    ].join("");
     const args = ["--profile", "headless", task];
 
     const child = spawn(executablePath, args, {
@@ -180,7 +191,7 @@ export class DshAdapter implements AgentRuntimeAdapter {
     this.active.set(execution.id, child);
     // 上游 504 会把单次调用拖到两分钟以上,再叠加重试就是几百秒。给一个硬超时,
     // 超时按瞬时错误处理(会被 isTransient 命中并退避重试),避免长尾。
-    const hardTimeoutMs = Number(process.env.DSH_TURN_TIMEOUT_MS || 90_000);
+    const hardTimeoutMs = Number(process.env.DSH_TURN_TIMEOUT_MS || 45_000);
     const hardTimer = setTimeout(() => {
       if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
     }, hardTimeoutMs);
