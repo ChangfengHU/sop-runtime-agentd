@@ -7,6 +7,16 @@ import { AcpClient, type AcpNotification } from "../acp/acp-client.js";
 import type { AdapterRunContext, AdapterRunResult, AgentCapabilities, AgentRuntimeAdapter } from "../contracts.js";
 import { errorMessage } from "../util.js";
 
+/**
+ * 只有真正需要产物的一轮(绑定了 Skill)才要求引擎写输出目录。
+ *
+ * 那句指令对 agent 是一条真实任务:实测 dsh 会为它多跑一轮"决定调工具 → 写文件 → 再作答",
+ * 单轮 5.2s → 7.5s 并真的产出 answer.txt。纯对话里它纯属浪费。
+ */
+function outputDirective(execution: { skill?: unknown; outputDir: string }): string {
+  return execution.skill ? `\n\nWrite every business output under the output directory: ${execution.outputDir}` : "";
+}
+
 const REASONING_TEXT_MAX_CHARS = 80_000;
 const REASONING_TEXT_TRUNCATED_CHARS = 60_000;
 const IDLE_TTL_MS = Number(process.env.CODEX_IDLE_TTL_MS || 20 * 60 * 1000);
@@ -280,7 +290,7 @@ export class CodexAppServerAdapter implements AgentRuntimeAdapter {
     });
 
     try {
-      const prompt = `${execution.instruction}\n\nWrite every business output under the output directory: ${execution.outputDir}`;
+      const prompt = `${execution.instruction}${outputDirective(execution)}`;
       await client.request("turn/start", { threadId, input: [{ type: "text", text: prompt }] });
       await finished;
       await emitChain;

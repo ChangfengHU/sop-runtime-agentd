@@ -12,6 +12,16 @@ import type {
 } from "../contracts.js";
 import { errorMessage, newId } from "../util.js";
 
+/**
+ * 只有真正需要产物的一轮(绑定了 Skill)才要求引擎写输出目录。
+ *
+ * 那句指令对 agent 是一条真实任务:实测 dsh 会为它多跑一轮"决定调工具 → 写文件 → 再作答",
+ * 单轮 5.2s → 7.5s 并真的产出 answer.txt。纯对话里它纯属浪费。
+ */
+function outputDirective(execution: { skill?: unknown; outputDir: string }): string {
+  return execution.skill ? `\n\nWrite every business output under the output directory: ${execution.outputDir}` : "";
+}
+
 const REASONING_TEXT_MAX_CHARS = 80_000;
 const REASONING_TEXT_TRUNCATED_CHARS = 60_000;
 // A resident agent that nobody has talked to for this long is recycled: keeping every past
@@ -351,7 +361,7 @@ export class AcpAdapter implements AgentRuntimeAdapter {
     context.signal.addEventListener("abort", onAbort, { once: true });
 
     try {
-      const prompt = `${execution.instruction}\n\nWrite every business output under the output directory: ${execution.outputDir}`;
+      const prompt = `${execution.instruction}${outputDirective(execution)}`;
       const result = await agent.client.request<any>("session/prompt", {
         sessionId: agent.acpSessionId,
         prompt: [{ type: "text", text: prompt }],

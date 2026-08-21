@@ -8,6 +8,16 @@ import type { CredentialResolver } from "../credentials.js";
 import type { ProviderRegistry } from "../providers.js";
 import { errorMessage, newId } from "../util.js";
 
+/**
+ * 只有真正需要产物的一轮(绑定了 Skill)才要求引擎写输出目录。
+ *
+ * 那句指令对 agent 是一条真实任务:实测 dsh 会为它多跑一轮"决定调工具 → 写文件 → 再作答",
+ * 单轮 5.2s → 7.5s 并真的产出 answer.txt。纯对话里它纯属浪费。
+ */
+function outputDirective(execution: { skill?: unknown; outputDir: string }): string {
+  return execution.skill ? `\n\nWrite every business output under the output directory: ${execution.outputDir}` : "";
+}
+
 // The headless profile reads its provider key straight from the launching environment
 // (dsh error text: "export DEEPSEEK_API_KEY in the launching environment").
 const DSH_CREDENTIAL_REF = process.env.DSH_CREDENTIAL_REF || "deepseek.key";
@@ -175,7 +185,7 @@ export class DshAdapter implements AgentRuntimeAdapter {
     const task = [
       transcript ? `以下是本次会话此前的对话记录,请据此理解上下文:\n\n${transcript}\n\n---\n` : "",
       execution.instruction,
-      `\n\nWrite every business output under the output directory: ${execution.outputDir}`,
+      outputDirective(execution),
     ].join("");
     const args = ["--profile", "headless", task];
 
