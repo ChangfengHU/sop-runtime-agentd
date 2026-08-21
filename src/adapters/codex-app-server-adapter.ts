@@ -37,6 +37,7 @@ export class CodexAppServerAdapter implements AgentRuntimeAdapter {
   private readonly threads = new Map<string, string>(); // agentd sessionRef -> codex threadId
   private readonly listeners = new Map<string, (event: AcpNotification) => void>();
   private readonly running = new Map<string, string>(); // executionId -> threadId
+  private spareThread: { threadId: string; workspace: string } | null = null;
 
   capabilities(): AgentCapabilities {
     return {
@@ -149,6 +150,14 @@ export class CodexAppServerAdapter implements AgentRuntimeAdapter {
   private async ensureThread(client: AcpClient, key: string, workspace: string, resumeId: string): Promise<string> {
     const known = this.threads.get(key);
     if (known) return known;
+    // 认领预建 thread(同 workspace、非 resume)
+    if (!resumeId && this.spareThread && this.spareThread.workspace === workspace) {
+      const claimed = this.spareThread.threadId;
+      this.spareThread = null;
+      this.threads.set(key, claimed);
+      void this.prewarm(workspace).catch(() => {});
+      return claimed;
+    }
     if (resumeId) {
       try {
         const resumed = await client.request<any>("thread/resume", { threadId: resumeId });
@@ -164,6 +173,15 @@ export class CodexAppServerAdapter implements AgentRuntimeAdapter {
     if (!id) throw new Error("codex thread/start 未返回 threadId");
     this.threads.set(key, id);
     return id;
+  }
+
+  /** 预热:拉起常驻 app-server 并预建一个 thread 备用。 */
+  async prewarm(workspace: string): Promise<void> {
+    if (this.spareThread) return;
+    const client = await this.ensureClient(workspace);
+    const started = await client.request<any>("thread/start", { cwd: workspace, sandbox: "workspace-write" });
+    const id = String(started?.thread?.id || started?.threadId || "");
+    if (id) this.spareThread = { threadId: id, workspace };
   }
 
   async warmup(input: { sessionId: string; workspace: string }): Promise<void> {

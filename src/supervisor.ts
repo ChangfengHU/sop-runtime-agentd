@@ -59,7 +59,7 @@ function toPublicWebhook(webhook: WebhookRecord): PublicWebhookRecord {
 }
 
 export class RuntimeAgentSupervisor {
-  private readonly adapters = new Map<string, AgentRuntimeAdapter>();
+  readonly adapters = new Map<string, AgentRuntimeAdapter>();
   private readonly queued: string[] = [];
   private readonly abortControllers = new Map<string, AbortController>();
   private activeCount = 0;

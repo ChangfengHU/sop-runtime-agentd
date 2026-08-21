@@ -64,6 +64,17 @@ const supervisor = new RuntimeAgentSupervisor(config, store, events, providers, 
   new DshAdapter({ credentialResolver: credentials, providers }),
 ]);
 const recovered = supervisor.recover();
+
+// 启动即预热常驻引擎:进程 + 一个预建会话。hermes/opencode 的首轮原本要等
+// 30-70s 的进程与 session 初始化,预热后首个真实会话直接认领。
+const warmupWorkspace = process.env.SOP_AGENTD_WARMUP_WORKSPACE || `${process.env.HOME}/wiki/runtime-management`;
+for (const adapter of supervisor.adapters.values()) {
+  const prewarm = (adapter as { prewarm?: (workspace: string) => Promise<void> }).prewarm;
+  if (typeof prewarm !== "function") continue;
+  void prewarm.call(adapter, warmupWorkspace).catch((error: unknown) => {
+    process.stdout.write(`${JSON.stringify({ level: "warn", service: "sop-runtime-agentd", message: `prewarm ${adapter.id} failed`, error: String(error) })}\n`);
+  });
+}
 const server = createHttpServer(supervisor);
 
 server.listen(config.port, config.host, () => {

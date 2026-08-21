@@ -126,6 +126,13 @@ export function createHttpServer(supervisor: RuntimeAgentSupervisor): http.Serve
           decodeURIComponent(sessionTurnsMatch[1] || ""),
           await readJson(request),
         );
+        // ?wait=<ms>:直接把这次请求挂住等终态,省掉客户端"提交 + 再取结果"的第二次往返
+        const waitMs = Number(url.searchParams.get("wait") || 0);
+        if (waitMs > 0) {
+          const settled = await supervisor.waitForTerminal(result.execution.id, Math.min(waitMs, 1_800_000));
+          json(response, 200, { ...result, execution: settled.execution, timedOut: settled.timedOut });
+          return;
+        }
         json(response, result.created ? 202 : 200, result);
         return;
       }

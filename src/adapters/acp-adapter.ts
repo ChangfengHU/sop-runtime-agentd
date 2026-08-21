@@ -59,6 +59,9 @@ export class AcpAdapter implements AgentRuntimeAdapter {
   // 否则会并行再起一个进程,冷启动白付两次(实测 hermes 因此仍是 58s)。
   private readonly starting = new Map<string, Promise<ResidentAgent>>();
   private engineProcess: EngineProcess | null = null;
+  // 预建但尚未被认领的会话:hermes 的 session/new 本身就要 30-45s,
+  // 只预热进程不够,得连会话一起备好,首个真实会话才能秒开。
+  private readonly spare = new Map<string, ResidentAgent>();  // workspace -> 备用会话
   private engineStarting: Promise<EngineProcess> | null = null;
   // 一个进程承载多个会话,通知必须按 ACP sessionId 分发到对应那一轮
   private readonly listeners = new Map<string, (event: AcpNotification) => void>();
@@ -205,7 +208,7 @@ export class AcpAdapter implements AgentRuntimeAdapter {
     return agent;
   }
 
-  /** 取得该会话的常驻 agent:已在跑就复用,正在启动就等它,都没有才新建。 */
+  /** 取得该会话的常驻 agent:已在跑就复用,有备用会话就认领,正在启动就等它,都没有才新建。 */
   private async acquire(context: AdapterRunContext): Promise<ResidentAgent> {
     this.sweepIdle();
     const { execution } = context;
@@ -214,6 +217,17 @@ export class AcpAdapter implements AgentRuntimeAdapter {
     if (existing && existing.client.alive) {
       existing.lastUsed = Date.now();
       return existing;
+    }
+    // 认领同 workspace 的预建会话(仅新会话可认领;resume 必须落到它自己的会话上)
+    if (execution.sessionPolicy !== "resume") {
+      const spare = this.spare.get(execution.workspace);
+      if (spare && spare.client.alive) {
+        this.spare.delete(execution.workspace);
+        spare.lastUsed = Date.now();
+        this.resident.set(key, spare);
+        void this.prewarm(execution.workspace).catch(() => {});  // 立刻补一个备用,不阻塞本轮
+        return spare;
+      }
     }
     const inflight = this.starting.get(key);
     if (inflight) return await inflight;
@@ -233,6 +247,16 @@ export class AcpAdapter implements AgentRuntimeAdapter {
     );
     this.starting.set(input.sessionId, pending);
     await pending;
+  }
+
+  /** 预热:拉起常驻进程并预建一个会话备用。agentd 启动时和认领后各调一次。 */
+  async prewarm(workspace: string): Promise<void> {
+    if (this.spare.get(workspace)?.client.alive) return;
+    const engine = await this.ensureEngineProcess(workspace);
+    const created = await engine.client.request<any>("session/new", { cwd: workspace, mcpServers: [] });
+    const acpSessionId = String(created?.sessionId || "");
+    if (!acpSessionId) throw new Error("ACP session/new 未返回 sessionId");
+    this.spare.set(workspace, { client: engine.client, acpSessionId, lastUsed: Date.now() });
   }
 
   async run(context: AdapterRunContext): Promise<AdapterRunResult> {
