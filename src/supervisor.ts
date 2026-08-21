@@ -1,5 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 
 import { collectArtifacts } from "./artifacts.js";
@@ -116,6 +118,13 @@ export class RuntimeAgentSupervisor {
     const workspace = path.resolve(input.workspace);
     const stat = await fs.stat(workspace);
     if (!stat.isDirectory()) throw new Error("workspace must be a directory");
+    // agentd 以普通用户运行,workspace 不可写时每一轮都会在 .sop-agentd/turns 上 EACCES;
+    // 在建会话时就说清楚,而不是等发消息才炸。
+    try {
+      await fs.access(workspace, fsConstants.W_OK);
+    } catch {
+      throw new Error(`工作目录不可写:${workspace}(agentd 以 ${os.userInfo().username} 运行,请换一个该用户可写的目录)`);
+    }
     if (input.engine === "sop-native") {
       const provider = input.providerId ? await this.providers.get(input.providerId) : undefined;
       if (!provider) {
@@ -232,6 +241,13 @@ export class RuntimeAgentSupervisor {
     const workspace = path.resolve(input.workspace);
     const stat = await fs.stat(workspace);
     if (!stat.isDirectory()) throw new Error("workspace must be a directory");
+    // agentd 以普通用户运行,workspace 不可写时每一轮都会在 .sop-agentd/turns 上 EACCES;
+    // 在建会话时就说清楚,而不是等发消息才炸。
+    try {
+      await fs.access(workspace, fsConstants.W_OK);
+    } catch {
+      throw new Error(`工作目录不可写:${workspace}(agentd 以 ${os.userInfo().username} 运行,请换一个该用户可写的目录)`);
+    }
     if (this.store.getWebhookByName(input.name)) {
       throw new SupervisorError(`Webhook name ${input.name} already exists`, 409);
     }
@@ -654,6 +670,13 @@ export class RuntimeAgentSupervisor {
     const workspace = path.resolve(input.workspace);
     const stat = await fs.stat(workspace);
     if (!stat.isDirectory()) throw new Error("workspace must be a directory");
+    // agentd 以普通用户运行,workspace 不可写时每一轮都会在 .sop-agentd/turns 上 EACCES;
+    // 在建会话时就说清楚,而不是等发消息才炸。
+    try {
+      await fs.access(workspace, fsConstants.W_OK);
+    } catch {
+      throw new Error(`工作目录不可写:${workspace}(agentd 以 ${os.userInfo().username} 运行,请换一个该用户可写的目录)`);
+    }
     const outputDir = assertPathWithin(workspace, input.outputDir, "outputDir");
     await ensureDir(outputDir);
     const materials = input.materials.map((material) => {

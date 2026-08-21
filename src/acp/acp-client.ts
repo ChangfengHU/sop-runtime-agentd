@@ -45,6 +45,14 @@ export class AcpClient {
     });
     const rl = readline.createInterface({ input: this.child.stdout!, crlfDelay: Infinity });
     rl.on("line", (line) => this.handleLine(line));
+    // spawn 失败(EACCES/ENOENT 等)会触发 error 事件;没有监听器时 Node 会把它抛成
+    // 未捕获异常,直接带走整个 agentd 进程(2026-08-20 因 codex 二进制切换实际发生过)。
+    this.child.once("error", (error) => {
+      this.closed = true;
+      const wrapped = new Error(`ACP agent spawn failed: ${error.message}`);
+      for (const [, pending] of this.pending) pending.reject(wrapped);
+      this.pending.clear();
+    });
     this.child.once("exit", (code, signal) => {
       this.closed = true;
       const error = new Error(`ACP agent exited (code=${String(code)}, signal=${String(signal)}): ${this.stderrTail.slice(-400)}`);
