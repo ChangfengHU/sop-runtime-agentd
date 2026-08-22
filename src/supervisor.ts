@@ -94,6 +94,40 @@ export class RuntimeAgentSupervisor {
     }));
   }
 
+  /**
+   * 各引擎的实测延迟(来自真实执行记录,不是一次性基准)。
+   * p50 用于引擎清单排序;没有样本的引擎返回 samples=0,由调用方排到最后。
+   */
+  engineMetrics(perEngine = 30): Array<{
+    id: string;
+    displayName: string;
+    samples: number;
+    p50Ms: number | null;
+    p95Ms: number | null;
+    maxMs: number | null;
+    successRate: number | null;
+    lastAt: string;
+  }> {
+    const byEngine = this.store.engineLatencySamples(perEngine);
+    const percentile = (sorted: number[], q: number) =>
+      sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))] ?? null : null;
+    return [...this.adapters.values()].map((adapter) => {
+      const samples = byEngine.get(adapter.id) ?? [];
+      const durations = samples.map((sample) => sample.ms).sort((a, b) => a - b);
+      const ok = samples.filter((sample) => sample.status === "completed").length;
+      return {
+        id: adapter.id,
+        displayName: adapter.displayName,
+        samples: samples.length,
+        p50Ms: percentile(durations, 0.5),
+        p95Ms: percentile(durations, 0.95),
+        maxMs: durations.length ? durations[durations.length - 1] ?? null : null,
+        successRate: samples.length ? ok / samples.length : null,
+        lastAt: samples[0]?.at || "",
+      };
+    });
+  }
+
   async probeAdapters(): Promise<Array<{ id: string; ok: boolean; reason: string; detail: Record<string, unknown> }>> {
     return await Promise.all(
       [...this.adapters.values()].map(async (adapter) => ({ id: adapter.id, ...(await adapter.probe()) })),

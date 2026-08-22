@@ -27,6 +27,12 @@ export interface StoreHealth {
   statusCounts: Record<string, number>;
 }
 
+export interface EngineLatencySample {
+  ms: number;
+  status: string;
+  at: string;
+}
+
 export class SupervisorStore {
   private readonly database: DatabaseSync;
 
@@ -201,6 +207,38 @@ export class SupervisorStore {
       .prepare("SELECT payload_json FROM executions WHERE session_ref = ? ORDER BY created_at ASC LIMIT ?")
       .all(sessionRef, Math.min(Math.max(limit, 1), 1_000)) as unknown as JsonRow[];
     return rows.map((row) => JSON.parse(row.payload_json) as ExecutionRecord);
+  }
+
+  /**
+   * 每个引擎最近若干轮的耗时样本,供引擎清单展示"实测延迟"。
+   * 只看已结束的轮次;时间戳在 payload 里,所以取回来在 JS 侧算。
+   */
+  engineLatencySamples(perEngine = 30, scan = 800): Map<string, EngineLatencySample[]> {
+    const rows = this.database
+      .prepare(`
+        SELECT engine, payload_json FROM executions
+        WHERE status IN ('completed', 'failed', 'cancelled', 'timeout')
+        ORDER BY created_at DESC LIMIT ?
+      `)
+      .all(Math.min(Math.max(scan, 1), 5_000)) as unknown as Array<{ engine: string; payload_json: string }>;
+    const cap = Math.min(Math.max(perEngine, 1), 200);
+    const byEngine = new Map<string, EngineLatencySample[]>();
+    for (const row of rows) {
+      const bucket = byEngine.get(row.engine) ?? [];
+      if (bucket.length >= cap) continue;
+      let record: ExecutionRecord;
+      try {
+        record = JSON.parse(row.payload_json) as ExecutionRecord;
+      } catch {
+        continue;
+      }
+      const started = Date.parse(record.startedAt || "");
+      const finished = Date.parse(record.finishedAt || "");
+      if (!Number.isFinite(started) || !Number.isFinite(finished) || finished < started) continue;
+      bucket.push({ ms: finished - started, status: record.status, at: record.finishedAt });
+      byEngine.set(row.engine, bucket);
+    }
+    return byEngine;
   }
 
   listActiveExecutions(): ExecutionRecord[] {

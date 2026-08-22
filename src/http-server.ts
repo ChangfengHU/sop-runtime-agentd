@@ -85,6 +85,11 @@ export function createHttpServer(supervisor: RuntimeAgentSupervisor): http.Serve
         json(response, 200, { providers: await supervisor.providers.list() });
         return;
       }
+      if (method === "GET" && url.pathname === "/v1/adapters/metrics") {
+        const perEngine = Number(url.searchParams.get("samples") || "30");
+        json(response, 200, { metrics: supervisor.engineMetrics(Number.isFinite(perEngine) ? perEngine : 30) });
+        return;
+      }
       if (method === "POST" && url.pathname === "/v1/adapters/probe") {
         json(response, 200, { adapters: await supervisor.probeAdapters() });
         return;
