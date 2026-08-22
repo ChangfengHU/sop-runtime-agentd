@@ -154,6 +154,8 @@ export class CodexAppServerAdapter implements AgentRuntimeAdapter {
       this.client = null;
       this.threads.clear();
       this.listeners.clear();
+      // 预建 thread 属于刚被杀掉的那个进程,不清会在下次认领时撞 "thread not found"
+      this.spareThread = null;
     }
   }
 
@@ -161,7 +163,7 @@ export class CodexAppServerAdapter implements AgentRuntimeAdapter {
     const known = this.threads.get(key);
     if (known) return known;
     // 认领预建 thread(同 workspace、非 resume)
-    if (!resumeId && this.spareThread && this.spareThread.workspace === workspace) {
+    if (!resumeId && this.spareThread && this.spareThread.workspace === workspace && this.client?.alive) {
       const claimed = this.spareThread.threadId;
       this.spareThread = null;
       this.threads.set(key, claimed);
