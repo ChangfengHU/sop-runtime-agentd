@@ -50,14 +50,26 @@ const supervisor = new RuntimeAgentSupervisor(config, store, events, providers, 
     displayName: "OpenCode",
     binary: "opencode",
     args: ["acp"],
-    authReason: async () => {
-      const config = path.join(os.homedir(), ".config", "opencode", "opencode.json");
+    // 配置里用 {env:SOP_DEEPSEEK_API_KEY} 引用,密钥不落盘到 opencode 的配置文件。
+    env: async () => {
       try {
-        await fsp.access(config);
-        return "";
+        return { SOP_DEEPSEEK_API_KEY: await credentials.resolve("deepseek.key") };
       } catch {
-        return "缺少 ~/.config/opencode/opencode.json(需配置模型 provider)";
+        return {};
       }
+    },
+    authReason: async () => {
+      // 两种扩展名都认(opencode 实际写的是 .jsonc);只有 $schema 的空壳等于没配 provider。
+      for (const name of ["opencode.jsonc", "opencode.json"]) {
+        const config = path.join(os.homedir(), ".config", "opencode", name);
+        try {
+          const text = await fsp.readFile(config, "utf8");
+          if (/"provider"\s*:/u.test(text)) return "";
+        } catch {
+          continue;
+        }
+      }
+      return "未配置模型 provider(~/.config/opencode/opencode.jsonc 里没有 provider 段)";
     },
   }),
   new OpenclawAdapter(),
