@@ -1,0 +1,3 @@
+# 本项目对外提供什么、依赖别人什么。4 列制表符分隔:方向/能力id/端点或位置/一句话
+provides	agentd.runtime	GET /v1/adapters/metrics 等	SOP 运行时接口:引擎清单、实测延迟、任务与事件协议
+consumes	vault.config	mcp:vyibc-vault	各引擎的认证配置
