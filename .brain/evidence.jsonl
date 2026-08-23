@@ -1,0 +1,1 @@
+{"date":"2026-08-23","task":"boss-state-cards","summary":"补状态卡:三源考古(文件/会话/环境)蒸馏,非当场记录","files":[".brain/STATE.md"],"verify":"~/.boss/projects.sh list → 本项目状态卡列不再是「无」","exit":0,"backfill":true,"wiki":"none"}
