@@ -7,7 +7,7 @@
 - 仓库:`ChangfengHU/sop-runtime-agentd`,分支 main。
 
 ## 金库键
-- `ssh:host-84`(全名 `ssh:host-84-8-217-45`)— 登生产机的方式;私钥本体在 `ssh:fleet-operator-key`。
+- `ssh:host-84-8-217-45`— 登生产机的方式;私钥本体在 `ssh:fleet-operator-key`。
 - `service:dashscope` — pi-agent(agentd provider)的模型认证,machined ensure-agents 写 provider 时用。
 - `service:github` — clone/push 仓库的 token。
 - 引擎凭据文件 `/etc/sop-runtime-agentd/credentials/`(root 700)是机器本地的,不在金库;claude/codex 登录态只能人工。
