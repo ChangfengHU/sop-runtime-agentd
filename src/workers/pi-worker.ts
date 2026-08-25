@@ -190,6 +190,14 @@ async function run(input: PiWorkerInput): Promise<void> {
     });
   }
 
+  // 内置工具 + 已加载扩展注册的工具名。tools 是白名单(sdk allowedToolNames):
+  // 不把扩展工具名加进来,pi 的 _refreshToolRegistry 会把它们过滤掉,模型就看不到。
+  // 扩展只有源宿主(设了 SOP_PI_EXTENSION_PATHS)才加载,普通 Runtime 这里仍只有内置七个。
+  const allowedTools: string[] = ["read", "bash", "edit", "write", "grep", "find", "ls"];
+  for (const extension of resourceLoader.getExtensions().extensions) {
+    for (const name of extension.tools?.keys?.() ?? []) allowedTools.push(name);
+  }
+
   const sessionManager = await sessionManagerFor(input);
   const { session } = await createAgentSession({
     cwd: input.workspace,
@@ -198,7 +206,7 @@ async function run(input: PiWorkerInput): Promise<void> {
     thinkingLevel: options.thinking === "high" ? "high" : options.thinking === "low" ? "low" : "medium",
     modelRuntime: runtime,
     resourceLoader,
-    tools: ["read", "bash", "edit", "write", "grep", "find", "ls"],
+    tools: allowedTools,
     sessionManager,
     settingsManager,
   });
