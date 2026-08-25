@@ -150,7 +150,15 @@ async function run(input: PiWorkerInput): Promise<void> {
     cwd: input.workspace,
     agentDir: input.agentDir,
     settingsManager,
+    // 默认关掉自动发现的扩展 —— 普通 Runtime 是裸执行环境。
+    // 但 additionalExtensionPaths 里显式点名的扩展仍会加载(loader 对它不受 noExtensions 影响):
+    // 源 Runtime 宿主(如 95)在 agentd 环境里设 SOP_PI_EXTENSION_PATHS=/path/to/fleet-ops,
+    // 只有它的会话才拿到机群运维工具。env 不设 = 数组为空 = 行为与从前完全一致。
     noExtensions: true,
+    additionalExtensionPaths: (process.env.SOP_PI_EXTENSION_PATHS ?? "")
+      .split(":")
+      .map((p) => p.trim())
+      .filter(Boolean),
     noPromptTemplates: true,
     noThemes: true,
     noContextFiles: true,
