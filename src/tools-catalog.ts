@@ -18,16 +18,20 @@ function packDisplayName(toolFilePath: string): string {
 // 列出 pi 会话实际会拿到的工具:内置七件套 + 由 SOP_PI_EXTENSION_PATHS 加载的扩展工具。
 // 只读自省 —— 用与 pi-worker 相同的方式加载资源,不跑任何会话。给 UI 的"能力清单"做数据源。
 
-export type ToolInfo = { name: string; description: string; source: "builtin" | "extension"; extension?: string };
+// kind 三分给 UI 用:builtin=内置七件套 / skill=pi 扩展(registerTool)/ mcp=MCP server 工具。
+// 注:pi 引擎(@earendil-works/pi-coding-agent)本身不支持 MCP,pi 源船的 mcp 段恒为空;
+// mcp 这条通道留给 MCP-capable 引擎(如 codex)。source 保留仅为老前端兼容。
+export type ToolKind = "builtin" | "skill" | "mcp";
+export type ToolInfo = { name: string; description: string; kind: ToolKind; source: "builtin" | "extension"; extension?: string };
 
 const BUILTINS: ToolInfo[] = [
-  { name: "read", description: "读取文件", source: "builtin" },
-  { name: "bash", description: "执行 shell 命令", source: "builtin" },
-  { name: "edit", description: "编辑文件", source: "builtin" },
-  { name: "write", description: "写入文件", source: "builtin" },
-  { name: "grep", description: "按内容搜索", source: "builtin" },
-  { name: "find", description: "按文件名查找", source: "builtin" },
-  { name: "ls", description: "列目录", source: "builtin" },
+  { name: "read", description: "读取文件", kind: "builtin", source: "builtin" },
+  { name: "bash", description: "执行 shell 命令", kind: "builtin", source: "builtin" },
+  { name: "edit", description: "编辑文件", kind: "builtin", source: "builtin" },
+  { name: "write", description: "写入文件", kind: "builtin", source: "builtin" },
+  { name: "grep", description: "按内容搜索", kind: "builtin", source: "builtin" },
+  { name: "find", description: "按文件名查找", kind: "builtin", source: "builtin" },
+  { name: "ls", description: "列目录", kind: "builtin", source: "builtin" },
 ];
 
 let cache: { ts: number; tools: ToolInfo[] } | undefined;
@@ -70,6 +74,7 @@ export async function listAgentTools(dataDir: string): Promise<ToolInfo[]> {
             tools.push({
               name,
               description: String(def?.description ?? def?.label ?? ""),
+              kind: "skill",
               source: "extension",
               extension: label,
             });
