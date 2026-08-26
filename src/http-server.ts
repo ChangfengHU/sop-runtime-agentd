@@ -4,6 +4,7 @@ import path from "node:path";
 
 import type { RuntimeAgentSupervisor } from "./supervisor.js";
 import { errorMessage, SupervisorError, WebhookRateLimitError } from "./util.js";
+import { listAgentTools } from "./tools-catalog.js";
 
 const WEBHOOK_HEADER_ALLOWLIST = ["x-github-event", "x-event-type", "user-agent"];
 
@@ -79,6 +80,11 @@ export function createHttpServer(supervisor: RuntimeAgentSupervisor): http.Serve
       }
       if (method === "GET" && url.pathname === "/v1/adapters") {
         json(response, 200, { adapters: supervisor.listAdapters() });
+        return;
+      }
+      if (method === "GET" && url.pathname === "/v1/tools") {
+        // 只读:pi 会话实际会拿到的工具(内置 + SOP_PI_EXTENSION_PATHS 扩展)。给 UI 能力清单。
+        json(response, 200, { tools: await listAgentTools(supervisor.config.dataDir) });
         return;
       }
       if (method === "GET" && url.pathname === "/v1/providers") {
