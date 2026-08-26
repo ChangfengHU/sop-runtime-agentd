@@ -65,18 +65,23 @@ export async function listAgentTools(dataDir: string): Promise<ToolInfo[]> {
       });
       await rl.reload();
       for (const extension of rl.getExtensions().extensions) {
-        const label = packDisplayName(String(extension.path ?? "extension"));
+        const extPath = String(extension.path ?? "extension");
+        const packLabel = /pi-mcp-adapter/.test(extPath) ? "pi-mcp-adapter" : packDisplayName(extPath);
         const map = extension.tools;
         if (map && typeof (map as { entries?: unknown }).entries === "function") {
           // Map 值是 { definition, sourceInfo };描述在 definition.description
           for (const [name, entry] of map as Map<string, { definition?: { description?: string; label?: string } }>) {
             const def = entry?.definition;
+            // MCP 归类:pi-mcp-adapter 的 mcp/mcpScript/mcp__*,以及 fleet-ops 直连金库的 vault_* 工具。
+            // vault_* 背后就是 vyibc-vault 这个 MCP server,归到 MCP 段、按 server 名分组。
+            const isMcp = /pi-mcp-adapter/.test(extPath) || /^mcp(__|Script$|$)/.test(name) || /^vault_/.test(name);
+            const kind: ToolKind = isMcp ? "mcp" : "skill";
             tools.push({
               name,
               description: String(def?.description ?? def?.label ?? ""),
-              kind: "skill",
+              kind,
               source: "extension",
-              extension: label,
+              extension: /^vault_/.test(name) ? "vyibc-vault" : packLabel,
             });
           }
         }

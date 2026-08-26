@@ -209,6 +209,9 @@ async function run(input: PiWorkerInput): Promise<void> {
     tools: allowedTools,
     sessionManager,
     settingsManager,
+    // 让会话在扩展绑定时发出 session_start —— 依赖生命周期事件初始化的扩展(如 pi-mcp-adapter
+    // 在 session_start 里启动 MCP 网关)否则不会初始化,其工具会报 "gateway not initialized"。
+    sessionStartEvent: { type: "session_start", reason: "startup" },
   });
   activeSession = session;
   const nativeRunId = newId("pi-run");
