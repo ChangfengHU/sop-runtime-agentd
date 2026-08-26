@@ -49,7 +49,9 @@ export async function listAgentTools(dataDir: string): Promise<ToolInfo[]> {
         const label = String(extension.path ?? "extension").split("/").filter(Boolean).pop() || "extension";
         const map = extension.tools;
         if (map && typeof (map as { entries?: unknown }).entries === "function") {
-          for (const [name, def] of map as Map<string, { description?: string; label?: string }>) {
+          // Map 值是 { definition, sourceInfo };描述在 definition.description
+          for (const [name, entry] of map as Map<string, { definition?: { description?: string; label?: string } }>) {
+            const def = entry?.definition;
             tools.push({
               name,
               description: String(def?.description ?? def?.label ?? ""),
