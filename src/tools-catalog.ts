@@ -1,4 +1,19 @@
+import { readFileSync } from "node:fs";
+import { dirname, basename } from "node:path";
 import { DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
+
+// 技能包的展示名:优先 package.json 的 pi.displayName / name(去掉 -extension 后缀),
+// 再退到目录名。绝不用 index.js 这种文件名——那对用户没有意义。
+function packDisplayName(toolFilePath: string): string {
+  const dir = dirname(toolFilePath);
+  try {
+    const pkg = JSON.parse(readFileSync(`${dir}/package.json`, "utf8")) as { name?: string; pi?: { displayName?: string } };
+    const raw = pkg.pi?.displayName || pkg.name || basename(dir);
+    return raw.replace(/-extension$/, "");
+  } catch {
+    return basename(dir).replace(/-extension$/, "");
+  }
+}
 
 // 列出 pi 会话实际会拿到的工具:内置七件套 + 由 SOP_PI_EXTENSION_PATHS 加载的扩展工具。
 // 只读自省 —— 用与 pi-worker 相同的方式加载资源,不跑任何会话。给 UI 的"能力清单"做数据源。
@@ -46,7 +61,7 @@ export async function listAgentTools(dataDir: string): Promise<ToolInfo[]> {
       });
       await rl.reload();
       for (const extension of rl.getExtensions().extensions) {
-        const label = String(extension.path ?? "extension").split("/").filter(Boolean).pop() || "extension";
+        const label = packDisplayName(String(extension.path ?? "extension"));
         const map = extension.tools;
         if (map && typeof (map as { entries?: unknown }).entries === "function") {
           // Map 值是 { definition, sourceInfo };描述在 definition.description
