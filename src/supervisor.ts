@@ -841,9 +841,9 @@ export class RuntimeAgentSupervisor {
       if (result.reasoningText) execution.reasoningText = result.reasoningText;
       execution.artifacts = await collectArtifacts(execution.outputDir);
       if (execution.skill) {
-        if (!execution.artifacts.some((artifact) => artifact.name === "manifest.json")) {
-          throw new Error("Bound Skill completed without manifest.json");
-        }
+        // manifest.json 只是 youtube-wiki skill 的系统索引约定(见 pi-worker 提示),不是通用成功条件。
+        // 曾把"没 manifest.json"当失败,导致任何不写 manifest 的通用 skill(哪怕正常产出业务产物)被判失败。
+        // 成功的唯一硬条件应是:产出了业务产物。manifest.json 有则用作索引,无则无妨。
         if (!execution.artifacts.some((artifact) => artifact.relayable)) {
           throw new Error("Bound Skill completed without a business artifact");
         }
