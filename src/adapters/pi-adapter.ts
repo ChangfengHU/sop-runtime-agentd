@@ -104,6 +104,9 @@ export class PiAdapter implements AgentRuntimeAdapter {
       requestedSessionId: execution.sessionId,
       sessionDir: path.join(this.options.dataDir, "sessions", execution.instanceId),
       agentDir: this.options.agentDir ?? path.join(this.options.dataDir, "pi-agent"),
+      // 会话级白名单/写权限:supervisor.createTurn 从 session.metadata 合并进 execution.metadata。
+      ...(Array.isArray(execution.metadata?.tool_allowlist) ? { toolAllowlist: (execution.metadata.tool_allowlist as unknown[]).map(String) } : {}),
+      ...(typeof execution.metadata?.write_scope === "string" ? { writeScope: execution.metadata.write_scope as string } : {}),
     };
 
     let stderr = "";

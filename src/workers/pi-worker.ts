@@ -1,4 +1,5 @@
 import path from "node:path";
+import { applyToolAllowlist } from "../tool-allowlist.js";
 
 import {
   createAgentSession,
@@ -193,9 +194,23 @@ async function run(input: PiWorkerInput): Promise<void> {
   // 内置工具 + 已加载扩展注册的工具名。tools 是白名单(sdk allowedToolNames):
   // 不把扩展工具名加进来,pi 的 _refreshToolRegistry 会把它们过滤掉,模型就看不到。
   // 扩展只有源宿主(设了 SOP_PI_EXTENSION_PATHS)才加载,普通 Runtime 这里仍只有内置七个。
-  const allowedTools: string[] = ["read", "bash", "edit", "write", "grep", "find", "ls"];
+  const hostTools: string[] = ["read", "bash", "edit", "write", "grep", "find", "ls"];
   for (const extension of resourceLoader.getExtensions().extensions) {
-    for (const name of extension.tools?.keys?.() ?? []) allowedTools.push(name);
+    for (const name of extension.tools?.keys?.() ?? []) hostTools.push(name);
+  }
+  // 会话级硬约束:预设/派单写进 session.metadata 的 tool_allowlist 与 write_scope 在这里生效——
+  // 白名单外的工具不进 tools,模型看不见也调不到(不再靠提示词自觉)。
+  const gated = applyToolAllowlist(hostTools, input.toolAllowlist, input.writeScope);
+  const allowedTools = gated.tools;
+  if (gated.removed.length || gated.unknown.length) {
+    send({
+      kind: "event",
+      type: "tools.allowlist.applied",
+      subjectKind: "tool",
+      subjectId: "allowlist",
+      summary: `Tool allowlist applied: ${allowedTools.length} allowed, ${gated.removed.length} removed${gated.unknown.length ? `, ${gated.unknown.length} unknown` : ""}`,
+      data: { allowed: allowedTools, removed: gated.removed, unknown: gated.unknown, writeScope: input.writeScope ?? "" },
+    });
   }
 
   const sessionManager = await sessionManagerFor(input);

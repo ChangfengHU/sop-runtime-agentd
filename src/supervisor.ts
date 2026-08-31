@@ -427,7 +427,14 @@ export class RuntimeAgentSupervisor {
       sessionPolicy: session.nativeSessionId ? "resume" : "persistent",
       sessionId: session.nativeSessionId || session.id,
       timeoutMs: input.timeoutMs,
-      metadata: { ...input.metadata, sessionRef: session.id, turnIndex },
+      metadata: {
+        // 会话级白名单/写权限随会话走:预设在建会话时写进 session.metadata,每一轮都带给引擎。
+        ...(Array.isArray(session.metadata?.tool_allowlist) ? { tool_allowlist: session.metadata.tool_allowlist } : {}),
+        ...(typeof session.metadata?.write_scope === "string" ? { write_scope: session.metadata.write_scope } : {}),
+        ...input.metadata,
+        sessionRef: session.id,
+        turnIndex,
+      },
     };
     const submitted = await this.submit(submitInput, { sessionRef: session.id });
     return { ...submitted, session: this.requiredSession(sessionId) };
