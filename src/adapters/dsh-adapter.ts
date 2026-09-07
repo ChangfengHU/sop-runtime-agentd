@@ -38,6 +38,7 @@ interface MuxFrame {
   questions?: unknown;
 }
 interface DshPage { records?: Array<{ type?: string; event?: MuxFrame["event"] }>; events?: Array<{ event?: MuxFrame["event"] }> }
+interface DshSessionList { items?: Array<{ sessionId?: string; projections?: { asOfSeq?: number } }> }
 const pageEvents = (page: DshPage) => (page.records || page.events || []).map(entry => entry.event || {});
 
 export class DshWebClient {
@@ -51,7 +52,7 @@ export class DshWebClient {
     return value;
   }
 
-  async rpc<T = any>(method: string, payload: Record<string, unknown>, shape: "request" | "args" = "request"): Promise<T> {
+  async rpc<T = any>(method: string, payload: Record<string, unknown>, shape: "request" | "args" | "_request" = "request"): Promise<T> {
     if (!/^[a-z][a-zA-Z0-9-]*\/[a-zA-Z0-9-]+$/u.test(method)) throw new Error(`dsh RPC method invalid: ${method}`);
     const response = await fetch(`${this.baseUrl}/api/${method}`, {
       method: "POST",
@@ -60,7 +61,7 @@ export class DshWebClient {
         type: "client-request",
         rpcId: crypto.randomUUID(),
         method,
-        payload: { args: shape === "request" ? { request: payload } : payload },
+        payload: { args: shape === "request" ? { request: payload } : shape === "_request" ? { _request: payload } : payload },
       }),
     });
     if (!response.ok) throw new Error(`dsh ${method}: HTTP ${response.status}`);
@@ -71,6 +72,20 @@ export class DshWebClient {
       throw new Error(`dsh ${method}: ${error?.code || "unknown"} ${error?.message || ""}`.trim());
     }
     return result.value as T;
+  }
+
+  async page(sessionId: string, maxMessages = 100): Promise<DshPage> {
+    const sessions = await this.rpc<DshSessionList>("session/list", {}, "_request");
+    const row = sessions.items?.find(item => item.sessionId === sessionId);
+    const throughSeq = row?.projections?.asOfSeq;
+    if (!Number.isSafeInteger(throughSeq) || Number(throughSeq) < -1) {
+      throw new Error(`dsh session/list omitted a valid cursor for ${sessionId}`);
+    }
+    return await this.rpc<DshPage>("session/page", {
+      address: { kind: "session", sessionId },
+      throughSeq: Number(throughSeq),
+      maxMessages,
+    });
   }
 
 }
@@ -177,7 +192,7 @@ export class DshAdapter implements AgentRuntimeAdapter {
     modelSubject: string,
   ): Promise<AdapterRunResult> {
     const { execution } = context;
-    const page = await this.client.rpc<DshPage>("session/page", { address: { kind: "session", sessionId }, maxMessages: 100 });
+    const page = await this.client.page(sessionId);
     const baseline = Math.max(-1, ...pageEvents(page).map(event => Number(event.seq ?? -1)));
     await this.client.rpc("session/prompt", {
       requestId: execution.id,
@@ -192,7 +207,7 @@ export class DshAdapter implements AgentRuntimeAdapter {
         throw new Error("DeepSeek Harness turn was cancelled");
       }
       await new Promise(resolve => setTimeout(resolve, 1_000));
-      const current = await this.client.rpc<DshPage>("session/page", { address: { kind: "session", sessionId }, maxMessages: 100 });
+      const current = await this.client.page(sessionId);
       const events = pageEvents(current).filter(event => Number(event.seq ?? -1) > baseline);
       let responseText = "";
       for (const event of events) {

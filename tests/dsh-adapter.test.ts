@@ -18,8 +18,13 @@ test("DSH 0.1.2 client sends slash endpoint, browser cookie and args.request env
     request.on("end", () => {
       const entry = { url: request.url, cookie: request.headers.cookie, body: JSON.parse(Buffer.concat(chunks).toString("utf8")) };
       observed.push(entry);
+      const value = entry.body.method === "session/list"
+        ? { items: [{ sessionId: "s1", projections: { asOfSeq: 7 } }] }
+        : entry.body.method === "session/page"
+          ? { records: [], hasMore: false }
+          : [{ id: "deepseek-official" }];
       response.setHeader("content-type", "application/json");
-      response.end(JSON.stringify({ type: "server-response", rpcId: entry.body.rpcId, result: { ok: true, value: [{ id: "deepseek-official" }] } }));
+      response.end(JSON.stringify({ type: "server-response", rpcId: entry.body.rpcId, result: { ok: true, value } }));
     });
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
@@ -28,15 +33,17 @@ test("DSH 0.1.2 client sends slash endpoint, browser cookie and args.request env
     if (!address || typeof address === "string") throw new Error("missing test address");
     const client = new DshWebClient(`http://127.0.0.1:${address.port}`, cookieFile);
     assert.deepEqual(await client.rpc("llm/listProviders", {}, "args"), [{ id: "deepseek-official" }]);
-    await client.rpc("session/page", { address: { kind: "session", sessionId: "s1" }, maxMessages: 100 });
+    await client.page("s1");
     assert.equal(observed[0]?.url, "/api/llm/listProviders");
     assert.equal(observed[0]?.cookie, "dsh-auth-fixture=signed.value");
     assert.equal(observed[0]?.body.type, "client-request");
     assert.equal(observed[0]?.body.method, "llm/listProviders");
     assert.deepEqual(observed[0]?.body.payload, { args: {} });
     assert.equal(typeof observed[0]?.body.rpcId, "string");
-    assert.equal(observed[1]?.url, "/api/session/page");
-    assert.deepEqual(observed[1]?.body.payload, { args: { request: { address: { kind: "session", sessionId: "s1" }, maxMessages: 100 } } });
+    assert.equal(observed[1]?.url, "/api/session/list");
+    assert.deepEqual(observed[1]?.body.payload, { args: { _request: {} } });
+    assert.equal(observed[2]?.url, "/api/session/page");
+    assert.deepEqual(observed[2]?.body.payload, { args: { request: { address: { kind: "session", sessionId: "s1" }, throughSeq: 7, maxMessages: 100 } } });
   } finally {
     server.close();
     await rm(root, { recursive: true, force: true });
