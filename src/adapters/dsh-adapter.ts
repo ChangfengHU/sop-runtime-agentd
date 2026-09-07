@@ -37,6 +37,8 @@ interface MuxFrame {
   approvalId?: string;
   questions?: unknown;
 }
+interface DshPage { records?: Array<{ type?: string; event?: MuxFrame["event"] }>; events?: Array<{ event?: MuxFrame["event"] }> }
+const pageEvents = (page: DshPage) => (page.records || page.events || []).map(entry => entry.event || {});
 
 export class DshWebClient {
   constructor(private readonly baseUrl: string, private readonly cookieFile = DSH_WEB_COOKIE_FILE) {}
@@ -175,8 +177,8 @@ export class DshAdapter implements AgentRuntimeAdapter {
     modelSubject: string,
   ): Promise<AdapterRunResult> {
     const { execution } = context;
-    const page = await this.client.rpc<{ events?: Array<{ event?: MuxFrame["event"] }> }>("session/page", { address: { kind: "session", sessionId }, maxMessages: 100 });
-    const baseline = Math.max(-1, ...(page.events || []).map(entry => Number(entry.event?.seq ?? -1)));
+    const page = await this.client.rpc<DshPage>("session/page", { address: { kind: "session", sessionId }, maxMessages: 100 });
+    const baseline = Math.max(-1, ...pageEvents(page).map(event => Number(event.seq ?? -1)));
     await this.client.rpc("session/prompt", {
       requestId: execution.id,
       sessionId,
@@ -190,8 +192,8 @@ export class DshAdapter implements AgentRuntimeAdapter {
         throw new Error("DeepSeek Harness turn was cancelled");
       }
       await new Promise(resolve => setTimeout(resolve, 1_000));
-      const current = await this.client.rpc<{ events?: Array<{ event?: MuxFrame["event"] }> }>("session/page", { address: { kind: "session", sessionId }, maxMessages: 100 });
-      const events = (current.events || []).map(entry => entry.event || {}).filter(event => Number(event.seq ?? -1) > baseline);
+      const current = await this.client.rpc<DshPage>("session/page", { address: { kind: "session", sessionId }, maxMessages: 100 });
+      const events = pageEvents(current).filter(event => Number(event.seq ?? -1) > baseline);
       let responseText = "";
       for (const event of events) {
         if (event.type === "assistant/message") {
