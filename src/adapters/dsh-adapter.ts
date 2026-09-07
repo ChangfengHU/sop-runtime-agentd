@@ -49,7 +49,7 @@ export class DshWebClient {
     return value;
   }
 
-  async rpc<T = any>(method: string, payload: Record<string, unknown>): Promise<T> {
+  async rpc<T = any>(method: string, payload: Record<string, unknown>, shape: "request" | "args" = "request"): Promise<T> {
     if (!/^[a-z][a-zA-Z0-9-]*\/[a-zA-Z0-9-]+$/u.test(method)) throw new Error(`dsh RPC method invalid: ${method}`);
     const response = await fetch(`${this.baseUrl}/api/${method}`, {
       method: "POST",
@@ -58,7 +58,7 @@ export class DshWebClient {
         type: "client-request",
         rpcId: crypto.randomUUID(),
         method,
-        payload: { args: { request: payload } },
+        payload: { args: shape === "request" ? { request: payload } : payload },
       }),
     });
     if (!response.ok) throw new Error(`dsh ${method}: HTTP ${response.status}`);
@@ -108,7 +108,7 @@ export class DshAdapter implements AgentRuntimeAdapter {
   async probe(): Promise<{ ok: boolean; detail: Record<string, unknown>; reason: string }> {
     const detail: Record<string, unknown> = { adapter: this.id, profile: "web", endpoint: DSH_WEB_URL };
     try {
-      const providers = await this.client.rpc<Array<{ id?: string; name?: string }>>("llm/listProviders", {});
+      const providers = await this.client.rpc<Array<{ id?: string; name?: string }>>("llm/listProviders", {}, "args");
       detail.providers = providers.map(item => item.id || item.name).filter(Boolean);
       detail.authenticated = providers.length > 0;
       if (!providers.length) {
@@ -175,7 +175,7 @@ export class DshAdapter implements AgentRuntimeAdapter {
     modelSubject: string,
   ): Promise<AdapterRunResult> {
     const { execution } = context;
-    const page = await this.client.rpc<{ events?: Array<{ event?: MuxFrame["event"] }> }>("session/page", { sessionId, maxMessages: 100 });
+    const page = await this.client.rpc<{ events?: Array<{ event?: MuxFrame["event"] }> }>("session/page", { address: { kind: "session", sessionId }, maxMessages: 100 });
     const baseline = Math.max(-1, ...(page.events || []).map(entry => Number(entry.event?.seq ?? -1)));
     await this.client.rpc("session/prompt", {
       requestId: execution.id,
@@ -190,7 +190,7 @@ export class DshAdapter implements AgentRuntimeAdapter {
         throw new Error("DeepSeek Harness turn was cancelled");
       }
       await new Promise(resolve => setTimeout(resolve, 1_000));
-      const current = await this.client.rpc<{ events?: Array<{ event?: MuxFrame["event"] }> }>("session/page", { sessionId, maxMessages: 100 });
+      const current = await this.client.rpc<{ events?: Array<{ event?: MuxFrame["event"] }> }>("session/page", { address: { kind: "session", sessionId }, maxMessages: 100 });
       const events = (current.events || []).map(entry => entry.event || {}).filter(event => Number(event.seq ?? -1) > baseline);
       let responseText = "";
       for (const event of events) {
