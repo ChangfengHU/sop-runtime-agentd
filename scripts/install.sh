@@ -11,6 +11,7 @@ REF="${SOP_AGENTD_REF:-main}"
 INSTALL_DIR="${SOP_AGENTD_INSTALL_DIR:-/opt/sop-runtime-agentd}"
 PORT="${SOP_AGENTD_PORT:-8789}"
 START_SERVICE=true
+RESOLVE_REF_ONLY=false
 MCP_CONNECTIONS_FILE="${SOP_MCP_CONNECTIONS_MANIFEST:-}"
 
 while [[ $# -gt 0 ]]; do
@@ -20,6 +21,7 @@ while [[ $# -gt 0 ]]; do
     --install-dir) INSTALL_DIR="$2"; shift 2 ;;
     --port) PORT="$2"; shift 2 ;;
     --mcp-connections-file) MCP_CONNECTIONS_FILE="$2"; shift 2 ;;
+    --resolve-ref-only) RESOLVE_REF_ONLY=true; shift ;;
     --skip-start) START_SERVICE=false; shift ;;
     *) echo "Unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -47,13 +49,19 @@ if [[ ! -d "$INSTALL_DIR/.git" ]]; then
 fi
 
 git -C "$INSTALL_DIR" fetch --prune --tags origin
-if git -C "$INSTALL_DIR" rev-parse --verify --quiet "${REF}^{commit}" >/dev/null; then
-  RESOLVED_REF="$REF"
-elif git -C "$INSTALL_DIR" rev-parse --verify --quiet "origin/${REF}^{commit}" >/dev/null; then
-  RESOLVED_REF="origin/$REF"
+# Branch upgrades follow the freshly fetched remote, not a stale local branch.
+# Explicit refs/tags/... and commit SHAs still support reproducible rollback.
+if git -C "$INSTALL_DIR" show-ref --verify --quiet "refs/remotes/origin/$REF"; then
+  RESOLVED_REF="$(git -C "$INSTALL_DIR" rev-parse --verify "refs/remotes/origin/${REF}^{commit}")"
+elif RESOLVED_REF="$(git -C "$INSTALL_DIR" rev-parse --verify --quiet "${REF}^{commit}")"; then
+  :
 else
   echo "Unable to resolve Supervisor ref: $REF" >&2
   exit 3
+fi
+if [[ "$RESOLVE_REF_ONLY" == true ]]; then
+  printf '%s\n' "$RESOLVED_REF"
+  exit 0
 fi
 git -C "$INSTALL_DIR" checkout --detach "$RESOLVED_REF"
 

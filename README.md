@@ -63,6 +63,14 @@ turn narrowing, and the real Pi worker against a loopback model fixture (no
 external model or production machine). `npm run build` compiles the service and
 tests. Code verification does not mean a Runtime has been upgraded.
 
+## Installation ref checks
+
+`bash scripts/install.sh --install-dir /opt/sop-runtime-agentd --ref main --resolve-ref-only`
+fetches the repository and prints the commit that would be installed, without
+checking out code or changing services. A branch follows its freshly fetched
+`origin` ref, even if a local branch is stale. Explicit `refs/tags/...` and commit
+SHAs remain available for a pinned deployment or rollback.
+
 ## MCP session tools
 
 Supervisor `0.6.1` advertises `mcpTools: true` for `sop-native`. The control plane
