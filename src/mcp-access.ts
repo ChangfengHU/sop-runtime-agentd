@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { checkInstalledMcpCredentialBinding } from "./mcp-credential-binding.js";
 import type { ExecutionRecord } from "./contracts.js";
 import { McpSession, mcpBindingDigest, type McpBinding } from "./mcp-session.js";
 
@@ -30,7 +31,7 @@ async function credential(reference: string, signal: AbortSignal): Promise<strin
   return value;
 }
 
-export async function prepareExecutionMcp(execution: ExecutionRecord, signal: AbortSignal): Promise<McpSession | undefined> {
+export async function prepareExecutionMcp(execution: Pick<ExecutionRecord, "metadata">, signal: AbortSignal): Promise<McpSession | undefined> {
   const bindings = execution.metadata.mcp_bindings;
   const allowlist = execution.metadata.tool_allowlist as string[] | undefined;
   if ((!Array.isArray(bindings) || !bindings.length) && !allowlist?.some((name) => name.includes("::"))) return undefined;
@@ -44,6 +45,7 @@ export async function prepareExecutionMcp(execution: ExecutionRecord, signal: Ab
     signal,
     resolveCredential: (reference) => credential(reference, signal),
     authorize: async (binding: McpBinding, name: string) => {
+      await checkInstalledMcpCredentialBinding(binding);
       const tool = binding.tools.find((item) => item.name === name);
       const url = new URL(`/api/agent-presets/${encodeURIComponent(String(snapshot.agent_id))}/mcp-access`, origin);
       url.search = new URLSearchParams({ runtime_id: String(snapshot.runtime_id), version: String(snapshot.agent_version), server_id: binding.server_id, tool_name: name, schema_digest: tool?.schema_digest || "", binding_digest: mcpBindingDigest(binding) }).toString();

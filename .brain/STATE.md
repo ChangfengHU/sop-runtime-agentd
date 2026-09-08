@@ -6,7 +6,8 @@ openclaw/dsh/opencode)归一成统一的 执行/会话/事件/审批/webhook 契
 `node:http` 手写路由,`node:sqlite` 持久化。对外承诺 `agentd.runtime`,唯一消费方 sop-ui。
 
 ## 现状
-- 2026-09-08 后续：Supervisor0.6.0已实现pi MCP父进程代理、schema锁、每次调用源环境/配置核验、Vault引用解析及IPC工具调用。28测试/build通过（真实supervisor/adapter/worker接本地模型+MCP替身）。待Control的mcp-access/锁定清单配套及发布；旧Control缺接口时拒绝MCP派发。没有管理员体系，没有线上/63操作。完整契约见README「MCP session tools」。
+- 2026-09-08 MCP凭据目的地收口：读取机器安装的非秘密连接摘要清单后才允许解析Vault引用，每次调用重检；目录换URL/引用不能自动获得源凭据。30项测试/build通过，包括无网络请求的真实入口拒绝测试。凭据安装自动化、认证目录探针、部署仍待完成。
+- 2026-09-08 后续：Supervisor0.6.0已实现pi MCP父进程代理、schema锁、每次调用源环境/配置核验、Vault引用解析及IPC工具调用。28测试/build通过（真实supervisor/adapter/worker接本地模型+MCP替身）。Control ca5d551/UI 92dd780配套已推送，待发布；旧Control缺接口时拒绝MCP派发。没有管理员体系，没有线上/63操作。完整契约见README「MCP session tools」。
 - 2026-09-08：Supervisor 0.5.1 工具权限收口已开发、本地验证，未部署。空/畸形白名单与缺清单的Agent请求拒绝；续聊取工具交集、保留只读上限/身份快照；非pi引擎拒绝无法执行的工具限制。22测试及build通过，含真实pi worker+本地模型替身；a2a-studio Harness 17测试通过，不是生产63验收。契约见README「Session tool policy」。
 - main 与远端同步。8 月下旬整轮主题是**性能**:各引擎冷启动全面砍掉(常驻进程/预建会话池/
   dsh 改接常驻 web 的 /api),量级从几十秒降到个位数秒。
@@ -15,7 +16,7 @@ openclaw/dsh/opencode)归一成统一的 执行/会话/事件/审批/webhook 契
 - brain 只有能力声明和这张卡,交接文档(HANDOFF/TASKS)还欠着,踩坑史记在 sop-ui 的 dev-log 里。
 
 ## 下一步
-0. 受控发布0.5.1并经Harness验证源角色和普通会话；旧缺策略Agent会话需通过受控入口重新创建，不能从续聊请求补授权限。全引擎策略、上游授权撤回、原生会话归属与文件/网络隔离仍待做。
+0. 受控发布0.6.0并经Harness验证源角色和普通会话；旧缺策略Agent会话需通过受控入口重新创建，不能从续聊请求补授权限。全引擎策略、上游授权撤回、原生会话归属与文件/网络隔离仍待做。
 1. 仓库 `deploy/sop-runtime-agentd.service` 的 User 与线上对齐(claude),消除重装退化
 2. 版本双口径统一:package.json 0.1.0 vs src/supervisor.ts 的 SUPERVISOR_VERSION(sop-ui 拿后者做徽章比较,改版本改 supervisor.ts)
 3. README 的 HTTP API 章节与 http-server.ts 实况对齐(sessions/webhooks/steer/approval 全没写)

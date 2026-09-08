@@ -93,7 +93,16 @@ Credential references use `vault:<key>` for a complete header string, or
 The source host's private Vault credential file defaults to
 `/etc/sop-runtime-agentd/credentials/fleet-vault.key`; optional overrides are
 `SOP_MCP_VAULT_TOKEN_FILE` and `SOP_MCP_VAULT_URL`. Hosts without the required
-credential reject authenticated MCP bindings. Upstream credentials are never
+credential reject authenticated MCP bindings. Before resolving any Vault value,
+each load/call also checks `/etc/sop-runtime-agentd/mcp-credentials.json`
+(optional `SOP_MCP_CREDENTIAL_BINDINGS_FILE`). Its nonsecret format is
+`{"bindings":["sha256:<connection digest>"]}`; use exported `mcpBindingDigest`
+to hash the exact server ID, URL and header references installed for this
+machine. Changing a catalog endpoint or credential reference cannot install
+a new credential destination. Missing, malformed or removed bindings reject
+the next load/call. Public connections with no headers need no credential
+binding file. Installation automation remains a separate integration task.
+Upstream credentials are never
 added to session/Execution metadata, worker IPC inputs or tool events.
 
 This covers Streamable HTTP, not legacy SSE endpoints, stdio subprocesses,
