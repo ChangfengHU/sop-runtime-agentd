@@ -38,7 +38,7 @@ import {
 } from "./util.js";
 
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
-export const SUPERVISOR_VERSION = "0.5.1";
+export const SUPERVISOR_VERSION = "0.6.0";
 export const PROTOCOL_VERSION = 1;
 const WEBHOOK_PAYLOAD_TEMPLATE_MAX_CHARS = 8_000;
 

@@ -1,5 +1,6 @@
 import { SupervisorError } from "./util.js";
 import { isReadOnlyWriteScope as readOnly } from "./tool-allowlist.js";
+import { mcpBindingSchema } from "./mcp-session.js";
 
 type Metadata = Record<string, unknown>;
 const owns = (metadata: Metadata, key: string): boolean => Object.hasOwn(metadata, key);
@@ -16,6 +17,11 @@ function validateShape(metadata: Metadata): void {
   if (owns(metadata, "write_scope") && typeof metadata.write_scope !== "string") {
     throw new SupervisorError("invalid_write_scope", 403);
   }
+  if (owns(metadata, "mcp_bindings")) {
+    if (!Array.isArray(metadata.mcp_bindings) || metadata.mcp_bindings.length > 20 || metadata.mcp_bindings.some((binding) => !mcpBindingSchema.safeParse(binding).success)) {
+      throw new SupervisorError("invalid_mcp_bindings", 403);
+    }
+  }
 }
 
 /** Reject declared restrictions that the selected adapter cannot enforce. */
@@ -24,6 +30,10 @@ export function assertToolPolicy(engine: string, metadata: Metadata): void {
   const agentBound = ["preset_id", "ops_agent_id", "agent_access_snapshot"].some((key) => owns(metadata, key));
   if (agentBound && !owns(metadata, "tool_allowlist")) {
     throw new SupervisorError("agent_tool_allowlist_required", 403);
+  }
+  if ((metadata.tool_allowlist as string[] | undefined)?.some((name) => name.includes("::")) &&
+      (!Array.isArray(metadata.mcp_bindings) || !metadata.mcp_bindings.length || !metadata.agent_access_snapshot)) {
+    throw new SupervisorError("mcp_binding_required", 403);
   }
   if (engine !== "sop-native" && (owns(metadata, "tool_allowlist") || readOnly(metadata.write_scope))) {
     throw new SupervisorError("engine_tool_policy_not_supported", 403);
@@ -44,7 +54,7 @@ export function mergeTurnMetadata(session: Metadata, turn: Metadata): Metadata {
   if (owns(session, "write_scope") && (readOnly(session.write_scope) || !owns(turn, "write_scope"))) {
     merged.write_scope = session.write_scope;
   }
-  for (const key of ["preset_id", "ops_agent_id", "agent_access_snapshot", "vault_scope", "plugin_id"]) {
+  for (const key of ["preset_id", "ops_agent_id", "agent_access_snapshot", "vault_scope", "plugin_id", "mcp_bindings"]) {
     if (owns(session, key)) merged[key] = session[key];
   }
   return merged;

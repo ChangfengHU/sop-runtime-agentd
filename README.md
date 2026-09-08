@@ -63,6 +63,50 @@ turn narrowing, and the real Pi worker against a loopback model fixture (no
 external model or production machine). `npm run build` compiles the service and
 tests. Code verification does not mean a Runtime has been upgraded.
 
+## MCP session tools
+
+Supervisor `0.6.0` advertises `mcpTools: true` for `sop-native`. The control plane
+provides `metadata.mcp_bindings` containing registered server IDs, HTTPS URLs,
+Vault header references and selected tool names with `schema_digest` locks.
+The matching `agent_access_snapshot` and canonical `server_id::tool_name`
+allowlist are required. An ordinary turn cannot replace the session bindings.
+
+The pi adapter connects to Streamable HTTP MCP servers in its parent process
+using pinned MCP SDK `1.29.0`. It handles JSON/SSE responses and paginated tool
+catalogs. The model worker receives selected tool schemas and stable hashed
+model names, then calls the parent over IPC. Only the parent resolves headers
+and sends requests; known authentication values are redacted from returned
+content. Tool schemas are checked before loading and before each invocation;
+new or changed tools do not automatically gain permission. Interrupted tool
+calls are not replayed automatically.
+
+Each load/call checks the current Agent version, registered source/ordinary
+environment, selected tool and server configuration through the control plane's
+`GET /api/agent-presets/:id/mcp-access`. This uses Runtime registration, not
+human administrator accounts. `SOP_MCP_CONTROL_URL` optionally overrides the
+trusted control service (default `https://control.vyibc.com`). Old control
+services without that endpoint reject MCP dispatch instead of skipping checks.
+
+Credential references use `vault:<key>` for a complete header string, or
+`vault:<key>#<field>` for a top-level string field (for example
+`vault:service:example#authorization`). No Bearer prefix is guessed or added.
+The source host's private Vault credential file defaults to
+`/etc/sop-runtime-agentd/credentials/fleet-vault.key`; optional overrides are
+`SOP_MCP_VAULT_TOKEN_FILE` and `SOP_MCP_VAULT_URL`. Hosts without the required
+credential reject authenticated MCP bindings. Upstream credentials are never
+added to session/Execution metadata, worker IPC inputs or tool events.
+
+This covers Streamable HTTP, not legacy SSE endpoints, stdio subprocesses,
+OAuth login or OS-level sandboxing. Existing file/shell tools and source
+extensions still require separate filesystem/network isolation. Old Runtime
+versions must not receive MCP sessions until they advertise `mcpTools`.
+
+Validation includes a real supervisor + pi adapter + isolated worker, with
+loopback model/MCP fixtures, and rejection tests for schema drift, empty or
+unbound selections, invalid arguments, environment changes, failed tools and
+interrupted replies. These local fixtures do not establish production rollout
+or a successful 63-machine workflow.
+
 ## Provider Profile
 
 Create `/etc/sop-runtime-agentd/providers/deepseek-default.json`:

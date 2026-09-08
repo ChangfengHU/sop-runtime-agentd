@@ -8,6 +8,7 @@ import {
   SessionManager,
   SettingsManager,
   type AgentSessionEvent,
+  type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 
 import type { Material } from "../contracts.js";
@@ -17,6 +18,16 @@ import { errorMessage, newId } from "../util.js";
 let activeSession:
   | { abort(): Promise<void>; dispose(): void; steer(text: string): Promise<void>; sessionId: string }
   | undefined;
+const mcpPending = new Map<string, { resolve(value: unknown): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }>();
+
+function callMcp(toolId: string, args: unknown): Promise<unknown> {
+  const id = newId("mcp-call");
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { mcpPending.delete(id); reject(Error("mcp_proxy_timeout")); }, 90_000);
+    mcpPending.set(id, { resolve, reject, timer });
+    send({ kind: "mcp_call", id, toolId, arguments: args });
+  });
+}
 
 function send(message: PiWorkerMessage): void {
   if (process.send) {
@@ -198,6 +209,7 @@ async function run(input: PiWorkerInput): Promise<void> {
   for (const extension of resourceLoader.getExtensions().extensions) {
     for (const name of extension.tools?.keys?.() ?? []) hostTools.push(name);
   }
+  for (const tool of input.mcpTools || []) hostTools.push(tool.id);
   // 会话级硬约束:预设/派单写进 session.metadata 的 tool_allowlist 与 write_scope 在这里生效——
   // 白名单外的工具不进 tools,模型看不见也调不到(不再靠提示词自觉)。
   const gated = applyToolAllowlist(hostTools, input.toolAllowlist, input.writeScope);
@@ -218,6 +230,12 @@ async function run(input: PiWorkerInput): Promise<void> {
   }
 
   const sessionManager = await sessionManagerFor(input);
+  const mcpTools: ToolDefinition[] = (input.mcpTools || []).filter(tool => allowedTools.includes(tool.id)).map(tool => ({
+    name: tool.name, label: tool.id, description: tool.description,
+    parameters: tool.inputSchema as ToolDefinition["parameters"], executionMode: "sequential",
+    execute: async (_callId, args) => ({ content: [{ type: "text" as const, text: JSON.stringify(await callMcp(tool.id, args)) }], details: { tool_id: tool.id, schema_digest: tool.schema_digest } }),
+  }));
+  const sdkToolNames = allowedTools.map(id => (input.mcpTools || []).find(tool => tool.id === id)?.name || id);
   const { session } = await createAgentSession({
     cwd: input.workspace,
     agentDir: input.agentDir,
@@ -225,7 +243,8 @@ async function run(input: PiWorkerInput): Promise<void> {
     thinkingLevel: options.thinking === "high" ? "high" : options.thinking === "low" ? "low" : "medium",
     modelRuntime: runtime,
     resourceLoader,
-    tools: allowedTools,
+    tools: sdkToolNames,
+    customTools: mcpTools,
     sessionManager,
     settingsManager,
     // 让会话在扩展绑定时发出 session_start —— 依赖生命周期事件初始化的扩展(如 pi-mcp-adapter
@@ -369,6 +388,14 @@ async function run(input: PiWorkerInput): Promise<void> {
 process.on("message", (message: unknown) => {
   if (message && typeof message === "object" && "kind" in message) {
     const command = message as PiWorkerCommand;
+    if (command.kind === "mcp_result") {
+      const pending = mcpPending.get(command.id);
+      if (pending) {
+        clearTimeout(pending.timer); mcpPending.delete(command.id);
+        if (command.error) pending.reject(Error(command.error)); else pending.resolve(command.result);
+      }
+      return;
+    }
     if (command.kind === "cancel") {
       void activeSession?.abort();
       return;
