@@ -1,3 +1,4 @@
+import { configuredSkillBindingsSchema } from "./skill-bindings.js";
 import { SupervisorError } from "./util.js";
 import { isReadOnlyWriteScope as readOnly } from "./tool-allowlist.js";
 import { mcpBindingSchema } from "./mcp-session.js";
@@ -6,6 +7,7 @@ type Metadata = Record<string, unknown>;
 const owns = (metadata: Metadata, key: string): boolean => Object.hasOwn(metadata, key);
 
 function validateShape(metadata: Metadata): void {
+  if (owns(metadata, "skill_bindings") && !configuredSkillBindingsSchema.safeParse(metadata.skill_bindings).success) throw new SupervisorError("invalid_skill_bindings", 403);
   if (owns(metadata, "tool_allowlist")) {
     const tools = metadata.tool_allowlist;
     if (!Array.isArray(tools) || tools.some((tool) =>
@@ -35,7 +37,7 @@ export function assertToolPolicy(engine: string, metadata: Metadata): void {
       (!Array.isArray(metadata.mcp_bindings) || !metadata.mcp_bindings.length || !metadata.agent_access_snapshot)) {
     throw new SupervisorError("mcp_binding_required", 403);
   }
-  if (engine !== "sop-native" && (owns(metadata, "tool_allowlist") || readOnly(metadata.write_scope))) {
+  if (engine !== "sop-native" && (owns(metadata, "tool_allowlist") || owns(metadata, "skill_bindings") || readOnly(metadata.write_scope))) {
     throw new SupervisorError("engine_tool_policy_not_supported", 403);
   }
 }
@@ -54,7 +56,7 @@ export function mergeTurnMetadata(session: Metadata, turn: Metadata): Metadata {
   if (owns(session, "write_scope") && (readOnly(session.write_scope) || !owns(turn, "write_scope"))) {
     merged.write_scope = session.write_scope;
   }
-  for (const key of ["preset_id", "ops_agent_id", "agent_access_snapshot", "vault_scope", "plugin_id", "mcp_bindings"]) {
+  for (const key of ["preset_id", "ops_agent_id", "agent_access_snapshot", "vault_scope", "plugin_id", "mcp_bindings", "skill_bindings"]) {
     if (owns(session, key)) merged[key] = session[key];
   }
   return merged;

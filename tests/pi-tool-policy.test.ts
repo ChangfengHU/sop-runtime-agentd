@@ -81,9 +81,9 @@ test("real pi worker exposes only allowed tools and refuses an empty effective s
     const applied = success.find((message) => message.kind === "event" && message.type === "tools.allowlist.applied");
     assert.ok(applied?.kind === "event");
     assert.deepEqual(applied.data.allowed, ["read"]);
-    for (const toolAllowlist of [[], ["not_installed"], ["bash"]]) {
+    for (const toolAllowlist of [[], ["not_installed"], ["read", "not_installed"], ["bash"]]) {
       const denied = await runWorker({ ...input, toolAllowlist });
-      assert.ok(denied.some((message) => message.kind === "error" && message.message === "no_allowed_tools_available"), JSON.stringify(denied));
+      assert.ok(denied.some((message) => message.kind === "error" && message.message === (toolAllowlist.includes("not_installed") ? "configured_tool_not_available" : "no_allowed_tools_available")), JSON.stringify(denied));
     }
     assert.equal(requests.length, 1, "denied workers must never call the model");
   } finally {

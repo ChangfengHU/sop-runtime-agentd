@@ -8,6 +8,7 @@ export interface PiWorkerInput {
   instruction: string;
   materials: Material[];
   skill?: SkillBinding;
+  skills?: SkillBinding[];
   provider: ProviderProfile;
   sessionPolicy: "ephemeral" | "persistent" | "resume";
   requestedSessionId: string;

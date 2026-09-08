@@ -190,3 +190,28 @@ Provider listing API.
 Execution requests keep the public Node input stable as `instruction +
 materials`. Skill-specific values are inferred by the bound Agent and Skill;
 they do not become public Node API fields.
+
+### Explicit Agent Skills (Supervisor 0.6.2)
+
+`sop-native` advertises `configuredSkills: true`. Agent sessions supply
+`metadata.skill_bindings: [{id, version, path, digest, content_digest}]`, including
+an explicit empty array when no Skills are selected. The bridge returns each
+instance-local path and the SHA-256 of its actual `SKILL.md` bytes. `digest` keeps
+its existing package/deployment meaning; `content_digest` is a separate
+`sha256:<64 lowercase hex>` content lock. No new database column is needed.
+
+The supervisor checks the complete declared Skill set at creation and each turn,
+then the worker checks files again before contacting the model. It injects every
+bound Skill body with its base directory and keeps automatic Skill discovery off.
+Missing, changed, duplicate or escaping files fail execution. Unknown configured
+tools also fail before model dispatch. Failed workers release their IPC/process.
+
+Turn metadata cannot replace session Skill bindings. Native Workflow bindings
+retain their existing package digest and `skill.bound` fields; the first turn
+also pins content for subsequent turns. Evidence adds `contentDigest` and
+`contentLoaded`. The content lock covers `SKILL.md`, not all referenced assets or
+OS-level file/network access; tool access still follows the configured allowlist.
+
+Validation: `npm run build`, `npm test` (36 tests), including real pi worker
+requests with two Skills, unselected Skill exclusion, native compatibility,
+resume, and queue-time file changes. These are local tests, not online acceptance.

@@ -55,6 +55,7 @@ export const skillBindingSchema = z.object({
   version: z.string().default("unversioned"),
   path: z.string().min(1),
   digest: z.string().default(""),
+  content_digest: z.string().regex(/^sha256:[a-f0-9]{64}$/).optional(),
 });
 
 export type SkillBinding = z.infer<typeof skillBindingSchema>;
@@ -198,6 +199,7 @@ export interface AgentCapabilities {
   subagents: boolean;
   nativeCancellation: boolean;
   skills: boolean;
+  configuredSkills?: boolean;
   localWorkspace: boolean;
 }
 

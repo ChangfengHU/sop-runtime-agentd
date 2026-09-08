@@ -1,3 +1,4 @@
+import { configuredSkillBindings } from "../skill-bindings.js";
 import { fork, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -42,6 +43,7 @@ export class PiAdapter implements AgentRuntimeAdapter {
       subagents: false,
       nativeCancellation: true,
       skills: true,
+      configuredSkills: true,
       localWorkspace: true,
     };
   }
@@ -83,6 +85,7 @@ export class PiAdapter implements AgentRuntimeAdapter {
     if (!execution.provider) {
       throw new Error("sop-native execution requires a Provider Profile");
     }
+    const skills = configuredSkillBindings(execution.metadata, execution.skill);
     const mcp: McpSession | undefined = await (this.options.mcpFactory || prepareExecutionMcp)(execution, context.signal);
     try {
       if (mcp) await context.emit({ type: "mcp.binding.applied", status: "running", producer: "pi-agent", subject: { kind: "tool", id: "mcp" }, summary: `Bound ${mcp.tools.length} MCP tools`, data: { tools: mcp.tools.map(({ id, name, schema_digest }) => ({ id, name, schema_digest })) } });
@@ -107,7 +110,7 @@ export class PiAdapter implements AgentRuntimeAdapter {
         outputDir: execution.outputDir,
         instruction: execution.instruction,
         materials: execution.materials,
-        ...(execution.skill ? { skill: execution.skill } : {}),
+        skills,
         provider: execution.provider,
         sessionPolicy: execution.sessionPolicy,
         requestedSessionId: execution.sessionId,
@@ -135,6 +138,13 @@ export class PiAdapter implements AgentRuntimeAdapter {
           settled = true;
           this.active.delete(execution.id);
           context.signal.removeEventListener("abort", onAbort);
+          // A worker also owns an IPC channel when validation fails before session creation.
+          if (child.connected) child.disconnect();
+          const cleanup = setTimeout(() => {
+            if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+          }, 1_000);
+          cleanup.unref();
+          child.once("exit", () => clearTimeout(cleanup));
           callback();
         };
         const onAbort = (): void => {
@@ -173,7 +183,6 @@ export class PiAdapter implements AgentRuntimeAdapter {
           } else if (message.kind === "result") {
             void emitChain.then(() => {
               settle(() => resolve(message));
-              child.disconnect();
             });
           } else {
             void emitChain.then(() => settle(() => reject(new Error(message.message))));

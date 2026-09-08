@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import { readBoundSkills } from "../skill-bindings.js";
 import path from "node:path";
 import { applyToolAllowlist } from "../tool-allowlist.js";
 
@@ -71,7 +73,7 @@ async function sessionManagerFor(input: PiWorkerInput): Promise<SessionManager> 
   );
 }
 
-function buildPrompt(input: PiWorkerInput, skillName: string | undefined): string {
+function buildPrompt(input: PiWorkerInput, skills: Awaited<ReturnType<typeof readBoundSkills>>): string {
   const materials = input.materials.length > 0 ? input.materials.map(renderMaterial).join("\n") : "- none";
   const request = [
     "Runtime Node request:",
@@ -82,7 +84,7 @@ function buildPrompt(input: PiWorkerInput, skillName: string | undefined): strin
     "Materials:",
     materials,
   ].join("\n");
-  return skillName ? `/skill:${skillName} ${request}` : request;
+  return [...skills.map(({binding, content, filePath}) => `Bound Skill ${binding.id}@${binding.version} (base directory: ${path.dirname(filePath)}):\n${content}`), request].join("\n\n");
 }
 
 function extractAssistantText(event: AgentSessionEvent): string | undefined {
@@ -158,6 +160,7 @@ async function run(input: PiWorkerInput): Promise<void> {
     },
     { projectTrusted: true },
   );
+  const boundSkills = await readBoundSkills(input.workspace, input.skills ?? (input.skill ? [input.skill] : []));
   const resourceLoader = new DefaultResourceLoader({
     cwd: input.workspace,
     agentDir: input.agentDir,
@@ -175,10 +178,10 @@ async function run(input: PiWorkerInput): Promise<void> {
     noThemes: true,
     noContextFiles: true,
     noSkills: true,
-    additionalSkillPaths: input.skill ? [input.skill.path] : [],
+    additionalSkillPaths: boundSkills.map(skill => skill.filePath),
     appendSystemPrompt: [
       "You are the execution engine for one SOP Runtime Node.",
-      "Use only the bound Skill when one is provided. Do not invent hidden adapter fields.",
+      "Use only the explicitly bound Skills when provided. Do not invent hidden adapter fields.",
       `Write every business output under SOP_OUTPUT_DIR: ${input.outputDir}`,
       "Treat manifest.json as a system index, not a business artifact.",
       "Use the instruction and materials as the complete public input contract.",
@@ -187,19 +190,14 @@ async function run(input: PiWorkerInput): Promise<void> {
   });
   await resourceLoader.reload();
   const loadedSkills = resourceLoader.getSkills().skills;
-  if (input.skill && loadedSkills.length !== 1) {
-    throw new Error(`Expected exactly one bound Skill at ${input.skill.path}; loaded ${loadedSkills.length}`);
-  }
-  const skillName = loadedSkills[0]?.name;
-  if (input.skill) {
-    send({
-      kind: "event",
-      type: "skill.bound",
-      subjectKind: "skill",
-      subjectId: input.skill.id,
-      summary: `Bound Skill ${input.skill.id}@${input.skill.version}`,
-      data: { skillName, skillPath: input.skill.path, digest: input.skill.digest },
-    });
+  if (loadedSkills.length !== boundSkills.length) throw new Error("configured_skill_load_mismatch");
+  const loaded = await Promise.all(loadedSkills.map(async skill => ({skill, path: await fs.realpath(skill.filePath)})));
+  for (const item of boundSkills) {
+    const skill = loaded.find(skill => skill.path === item.filePath)?.skill;
+    if (!skill) throw new Error("configured_skill_load_mismatch");
+    send({ kind:"event", type:"skill.bound", subjectKind:"skill", subjectId:item.binding.id,
+      summary:`Bound Skill ${item.binding.id}@${item.binding.version}`,
+      data:{skillName:skill.name,skillPath:item.binding.path,digest:item.binding.digest,contentDigest:item.contentDigest,contentLoaded:true} });
   }
 
   // 内置工具 + 已加载扩展注册的工具名。tools 是白名单(sdk allowedToolNames):
@@ -225,6 +223,7 @@ async function run(input: PiWorkerInput): Promise<void> {
     });
   }
 
+  if (gated.unknown.length) throw new Error("configured_tool_not_available");
   if (input.toolAllowlist !== undefined && !allowedTools.length) {
     throw new Error("no_allowed_tools_available");
   }
@@ -361,7 +360,7 @@ async function run(input: PiWorkerInput): Promise<void> {
   });
 
   try {
-    await session.prompt(buildPrompt(input, skillName));
+    await session.prompt(buildPrompt(input, boundSkills));
     await session.waitForIdle();
     flushDelta();
     flushReasoningDelta();

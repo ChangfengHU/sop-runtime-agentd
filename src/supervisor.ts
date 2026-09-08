@@ -1,3 +1,4 @@
+import { configuredSkillBindings, readBoundSkills } from "./skill-bindings.js";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
@@ -38,7 +39,7 @@ import {
 } from "./util.js";
 
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
-export const SUPERVISOR_VERSION = "0.6.1";
+export const SUPERVISOR_VERSION = "0.6.2";
 export const PROTOCOL_VERSION = 1;
 const WEBHOOK_PAYLOAD_TEMPLATE_MAX_CHARS = 8_000;
 
@@ -166,6 +167,9 @@ export class RuntimeAgentSupervisor {
       if (!provider) {
         throw new Error(`Provider Profile ${input.providerId || "<missing>"} is not configured`);
       }
+    }
+    if (Object.hasOwn(input.metadata, "skill_bindings") || Array.isArray((input.metadata.agent_access_snapshot as {skills?:unknown})?.skills)) {
+      await readBoundSkills(workspace, configuredSkillBindings(input.metadata));
     }
     const timestamp = nowIso();
     const session: SessionRecord = {
@@ -488,12 +492,13 @@ export class RuntimeAgentSupervisor {
       error: "",
       responseText: "",
       artifacts: [],
-      metadata: { ...input.metadata },
+      metadata: { ...input.metadata, ...(normalized.skillBindings ? {skill_bindings: normalized.skillBindings} : {}) },
     };
     this.store.createExecution(execution);
     if (execution.sessionRef) {
       const session = this.store.getSession(execution.sessionRef);
       if (session) {
+        if (normalized.skillBindings && !Object.hasOwn(session.metadata, "skill_bindings")) session.metadata.skill_bindings = normalized.skillBindings;
         session.status = "active";
         session.activeExecutionId = execution.id;
         session.turnCount += 1;
@@ -710,6 +715,7 @@ export class RuntimeAgentSupervisor {
     outputDir: string;
     materials: CreateExecutionInput["materials"];
     skill?: CreateExecutionInput["skill"];
+    skillBindings?: CreateExecutionInput["skill"][];
   }> {
     const workspace = path.resolve(input.workspace);
     const stat = await fs.stat(workspace);
@@ -736,7 +742,10 @@ export class RuntimeAgentSupervisor {
         throw new Error("skill path must be a Skill directory or SKILL.md");
       }
     }
-    return { workspace, outputDir, materials, ...(skill ? { skill } : {}) };
+    const bound = await readBoundSkills(workspace, configuredSkillBindings(input.metadata, skill));
+    const pinSkills = input.engine === "sop-native" && (bound.length > 0 || Object.hasOwn(input.metadata, "skill_bindings"));
+    const skillBindings = bound.map(item => ({...item.binding, content_digest: item.contentDigest}));
+    return { workspace, outputDir, materials, ...(skill ? { skill } : {}), ...(pinSkills ? {skillBindings} : {}) };
   }
 
   private requiredExecution(id: string): ExecutionRecord {
