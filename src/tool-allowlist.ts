@@ -4,6 +4,10 @@
 
 export const WRITE_TOOLS = new Set(["bash", "edit", "write"]);
 
+export function isReadOnlyWriteScope(scope: unknown): boolean {
+  return typeof scope === "string" && /^只读|read-?only$/i.test(scope.trim());
+}
+
 export interface ToolAllowlistResult {
   tools: string[];
   removed: string[];
@@ -12,7 +16,7 @@ export interface ToolAllowlistResult {
 
 /**
  * @param available 宿主实际可用的工具名(内置 + 扩展)
- * @param allowlist session.metadata.tool_allowlist;空/缺省 = 不限制(与旧行为一致)
+ * @param allowlist session.metadata.tool_allowlist;仅缺省保持旧行为，显式空值不授予工具
  * @param writeScope session.metadata.write_scope;"只读" 时剔除 bash/edit/write
  */
 export function applyToolAllowlist(
@@ -21,11 +25,11 @@ export function applyToolAllowlist(
   writeScope: unknown,
 ): ToolAllowlistResult {
   const wanted = Array.isArray(allowlist) ? allowlist.map((item) => String(item)).filter(Boolean) : [];
-  const readOnly = typeof writeScope === "string" && /^只读|read-?only$/i.test(writeScope.trim());
+  const readOnly = isReadOnlyWriteScope(writeScope);
   let tools = [...available];
   const removed: string[] = [];
   const unknown: string[] = [];
-  if (wanted.length) {
+  if (allowlist !== undefined) {
     const wantedSet = new Set(wanted);
     for (const name of wanted) if (!available.includes(name)) unknown.push(name);
     tools = tools.filter((name) => {

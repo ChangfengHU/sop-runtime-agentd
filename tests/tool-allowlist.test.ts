@@ -11,6 +11,14 @@ test("no allowlist keeps host tools unchanged", () => {
   assert.deepEqual(result.removed, []);
 });
 
+test("an explicit empty or malformed allowlist never inherits host tools", () => {
+  for (const allowlist of [[], null, "read", {}, [""]]) {
+    const result = applyToolAllowlist(HOST, allowlist, undefined);
+    assert.deepEqual(result.tools, []);
+    assert.deepEqual(result.removed, HOST);
+  }
+});
+
 test("allowlist intersects and reports unknown names", () => {
   const result = applyToolAllowlist(HOST, ["read", "grep", "fleet_runtime_list", "not_a_tool"], "");
   assert.deepEqual(result.tools, ["read", "grep", "fleet_runtime_list"]);

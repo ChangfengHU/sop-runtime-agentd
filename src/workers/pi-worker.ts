@@ -202,7 +202,7 @@ async function run(input: PiWorkerInput): Promise<void> {
   // 白名单外的工具不进 tools,模型看不见也调不到(不再靠提示词自觉)。
   const gated = applyToolAllowlist(hostTools, input.toolAllowlist, input.writeScope);
   const allowedTools = gated.tools;
-  if (gated.removed.length || gated.unknown.length) {
+  if (input.toolAllowlist !== undefined || input.writeScope !== undefined || gated.removed.length || gated.unknown.length) {
     send({
       kind: "event",
       type: "tools.allowlist.applied",
@@ -211,6 +211,10 @@ async function run(input: PiWorkerInput): Promise<void> {
       summary: `Tool allowlist applied: ${allowedTools.length} allowed, ${gated.removed.length} removed${gated.unknown.length ? `, ${gated.unknown.length} unknown` : ""}`,
       data: { allowed: allowedTools, removed: gated.removed, unknown: gated.unknown, writeScope: input.writeScope ?? "" },
     });
+  }
+
+  if (input.toolAllowlist !== undefined && !allowedTools.length) {
+    throw new Error("no_allowed_tools_available");
   }
 
   const sessionManager = await sessionManagerFor(input);

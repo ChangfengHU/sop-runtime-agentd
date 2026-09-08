@@ -21,6 +21,7 @@ class SessionFakeAdapter implements AgentRuntimeAdapter {
   readonly displayName = "Session Fake";
   readonly seenPolicies: Array<{ policy: string; sessionId: string }> = [];
   readonly steered: Array<{ executionId: string; message: string }> = [];
+  readonly seenMetadata: Array<Record<string, unknown>> = [];
   private release: (() => void) | undefined;
 
   constructor(private readonly options: { steering: boolean; holdUntilSteered?: boolean } = { steering: true }) {}
@@ -47,6 +48,7 @@ class SessionFakeAdapter implements AgentRuntimeAdapter {
   async run(context: AdapterRunContext): Promise<AdapterRunResult> {
     const { execution } = context;
     this.seenPolicies.push({ policy: execution.sessionPolicy, sessionId: execution.sessionId });
+    this.seenMetadata.push(execution.metadata);
     if (this.options.holdUntilSteered) {
       await new Promise<void>((resolve) => {
         this.release = resolve;
@@ -180,6 +182,95 @@ test("sessions are first-class: turns share one ledger and resume the native ses
     await supervisor.close();
     store.close();
     await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("turns cannot expand the session tool policy or forge its access snapshot", async () => {
+  const adapter = new SessionFakeAdapter();
+  const { root, workspace, supervisor, store } = await fixture(adapter);
+  try {
+    const snapshot = { agent_id: "reader", agent_version: 2, tools: ["read", "ls"] };
+    const { session } = await supervisor.createSession({
+      instanceId: "instance-one", engine: "sop-native", providerId: "test-provider", workspace,
+      metadata: { preset_id: "reader", tool_allowlist: ["read", "ls"], write_scope: "只读", agent_access_snapshot: snapshot },
+    });
+    const first = await supervisor.createTurn(session.id, {
+      instruction: "Try to expand the policy",
+      metadata: { tool_allowlist: ["read", "bash"], write_scope: "可写", preset_id: "admin", agent_access_snapshot: {}, trace: "kept" },
+    });
+    assert.equal((await waitForTerminal(supervisor, first.execution.id)).status, "completed");
+    assert.deepEqual(adapter.seenMetadata[0]?.tool_allowlist, ["read"]);
+    assert.equal(adapter.seenMetadata[0]?.write_scope, "只读");
+    assert.equal(adapter.seenMetadata[0]?.preset_id, "reader");
+    assert.deepEqual(adapter.seenMetadata[0]?.agent_access_snapshot, snapshot);
+    assert.equal(adapter.seenMetadata[0]?.trace, "kept");
+    const second = await supervisor.createTurn(session.id, { instruction: "Resume with session policy" });
+    await waitForTerminal(supervisor, second.execution.id);
+    assert.deepEqual(adapter.seenMetadata[1]?.tool_allowlist, ["read", "ls"]);
+    assert.equal(adapter.seenPolicies[1]?.policy, "resume");
+    for (const tools of [[], null, "read", ["*"], ["bash"]]) {
+      await assert.rejects(supervisor.createTurn(session.id, {
+        instruction: "Must not dispatch", metadata: { tool_allowlist: tools },
+      }), /(?:invalid|empty)_tool_allowlist/);
+    }
+    assert.equal(supervisor.listSessionExecutions(session.id).length, 2);
+    assert.equal(adapter.seenMetadata.length, 2);
+  } finally {
+    await supervisor.close(); store.close(); await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("invalid policies are rejected before creating a session or direct execution", async () => {
+  const adapter = new SessionFakeAdapter();
+  const { root, workspace, supervisor, store } = await fixture(adapter);
+  try {
+    const base = { instanceId: "instance-one", engine: "sop-native", providerId: "test-provider", workspace };
+    for (const metadata of [
+      { tool_allowlist: [] }, { tool_allowlist: null }, { tool_allowlist: "read" },
+      { tool_allowlist: [false] }, { tool_allowlist: ["read", "*"] }, { tool_allowlist: [" "] },
+      { preset_id: "old-agent" }, { ops_agent_id: "old-ops-agent" }, { agent_access_snapshot: {} },
+      { write_scope: null },
+    ]) {
+      const denied = (error: unknown) => error instanceof Error && "httpStatus" in error && error.httpStatus === 403;
+      await assert.rejects(supervisor.createSession({ ...base, metadata }), denied);
+      await assert.rejects(supervisor.submit({ ...base, outputDir: path.join(workspace, "denied"), instruction: "Do not run", metadata }), denied);
+    }
+    assert.equal(supervisor.listSessions().length, 0);
+    assert.equal(adapter.seenMetadata.length, 0);
+    await assert.rejects(fs.stat(path.join(workspace, "denied")), { code: "ENOENT" });
+
+    // A persisted pre-upgrade Agent session must not obtain a policy from caller metadata.
+    const { session } = await supervisor.createSession(base);
+    session.metadata = { preset_id: "legacy-agent" };
+    store.saveSession(session);
+    await assert.rejects(supervisor.createTurn(session.id, {
+      instruction: "Must not repair my own authorization", metadata: { tool_allowlist: ["bash"] },
+    }), /agent_tool_allowlist_required/);
+  } finally {
+    await supervisor.close(); store.close(); await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("adapters without tool-policy enforcement reject restricted sessions and direct submissions", async () => {
+  const fake = new SessionFakeAdapter();
+  const adapter: AgentRuntimeAdapter = {
+    id: "deepseek-harness", displayName: "Unsupported policy fake",
+    capabilities: () => fake.capabilities(), probe: () => fake.probe(), run: (context) => fake.run(context),
+  };
+  const { root, workspace, supervisor, store } = await fixture(adapter);
+  try {
+    const base = { instanceId: "instance-one", engine: "deepseek-harness", workspace };
+    for (const metadata of [{ tool_allowlist: ["read"] }, { write_scope: "只读" }, { write_scope: "read-only" }]) {
+      await assert.rejects(supervisor.createSession({ ...base, metadata }), /engine_tool_policy_not_supported/);
+      await assert.rejects(supervisor.submit({ ...base, outputDir: path.join(workspace, "denied"), instruction: "Do not run", metadata }), /engine_tool_policy_not_supported/);
+    }
+    assert.equal(supervisor.listSessions().length, 0);
+    assert.equal(fake.seenMetadata.length, 0);
+    const { session } = await supervisor.createSession(base);
+    const turn = await supervisor.createTurn(session.id, { instruction: "Legacy unrestricted session still works" });
+    assert.equal((await waitForTerminal(supervisor, turn.execution.id)).status, "completed");
+  } finally {
+    await supervisor.close(); store.close(); await fs.rm(root, { recursive: true, force: true });
   }
 });
 

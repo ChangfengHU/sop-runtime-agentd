@@ -34,6 +34,35 @@ use the provided systemd unit and keep the endpoint private to the Runtime.
 - A bound Skill and every file material must stay inside the selected Instance workspace.
 - A successful bound-Skill execution must produce `manifest.json` and at least one business Artifact.
 
+## Session tool policy
+
+Supervisor `0.5.1` validates tool restrictions before session creation and direct
+execution submission, and rechecks persisted session policies on every turn.
+
+- `metadata.tool_allowlist` must be a non-empty list of exact tool names. Empty
+  lists, malformed values, and wildcards return HTTP 403. Agent-bound requests
+  (`preset_id`, `ops_agent_id`, or `agent_access_snapshot`) must include a list.
+- Turn tools intersect the session list. A turn cannot relax a session's
+  read-only scope or replace its Agent identity/access snapshot. The execution's
+  `tool_allowlist` records the effective turn list; the snapshot remains the
+  original session evidence.
+- Only `sop-native` currently enforces this policy. Other engines reject an
+  explicit tool list or read-only scope with `engine_tool_policy_not_supported`.
+  Unrestricted legacy requests without Agent bindings retain their old behavior.
+- Pi exposes the intersection with installed tools and emits
+  `tools.allowlist.applied` for every declared policy. An empty effective list
+  fails with `no_allowed_tools_available` before calling the model.
+
+Read-only filtering removes the built-in `bash`, `edit`, and `write` tools. It
+does not sandbox files, network access, or extension side effects. This is not
+global authorization: upstream authentication, grant revocation, native-session
+ownership checks, and all-engine isolation still require separate enforcement.
+
+Local verification: `npm test` exercises HTTP rejection, persisted sessions,
+turn narrowing, and the real Pi worker against a loopback model fixture (no
+external model or production machine). `npm run build` compiles the service and
+tests. Code verification does not mean a Runtime has been upgraded.
+
 ## Provider Profile
 
 Create `/etc/sop-runtime-agentd/providers/deepseek-default.json`:

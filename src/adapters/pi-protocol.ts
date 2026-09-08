@@ -12,7 +12,7 @@ export interface PiWorkerInput {
   requestedSessionId: string;
   sessionDir: string;
   agentDir: string;
-  /** 会话级工具白名单(来自 session.metadata.tool_allowlist);空 = 不限制。 */
+  /** 会话级工具白名单(来自 session.metadata.tool_allowlist);显式空列表不授予工具。 */
   toolAllowlist?: string[];
   /** 会话写权限(来自 session.metadata.write_scope);"只读" 时剔除 bash/edit/write。 */
   writeScope?: string;

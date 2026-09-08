@@ -26,6 +26,7 @@ import {
 import { EventHub } from "./event-hub.js";
 import { ProviderRegistry } from "./providers.js";
 import { SupervisorStore } from "./store.js";
+import { assertToolPolicy, mergeTurnMetadata } from "./tool-policy.js";
 import {
   assertPathWithin,
   ensureDir,
@@ -37,7 +38,7 @@ import {
 } from "./util.js";
 
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
-export const SUPERVISOR_VERSION = "0.5.0";
+export const SUPERVISOR_VERSION = "0.5.1";
 export const PROTOCOL_VERSION = 1;
 const WEBHOOK_PAYLOAD_TEMPLATE_MAX_CHARS = 8_000;
 
@@ -149,6 +150,7 @@ export class RuntimeAgentSupervisor {
     if (!this.adapters.has(input.engine)) {
       throw new SupervisorError(`Agent engine ${input.engine} is not installed in this Runtime Supervisor`, 409);
     }
+    assertToolPolicy(input.engine, input.metadata);
     const workspace = path.resolve(input.workspace);
     const stat = await fs.stat(workspace);
     if (!stat.isDirectory()) throw new Error("workspace must be a directory");
@@ -397,6 +399,7 @@ export class RuntimeAgentSupervisor {
     if (session.status === "closed") {
       throw new SupervisorError(`Session ${sessionId} is closed`, 409);
     }
+    assertToolPolicy(session.engine, session.metadata);
     const input = createTurnSchema.parse(rawInput);
     const requestId = input.requestId || newId("request");
     const existing = this.store.getByRequestId(requestId);
@@ -428,10 +431,7 @@ export class RuntimeAgentSupervisor {
       sessionId: session.nativeSessionId || session.id,
       timeoutMs: input.timeoutMs,
       metadata: {
-        // 会话级白名单/写权限随会话走:预设在建会话时写进 session.metadata,每一轮都带给引擎。
-        ...(Array.isArray(session.metadata?.tool_allowlist) ? { tool_allowlist: session.metadata.tool_allowlist } : {}),
-        ...(typeof session.metadata?.write_scope === "string" ? { write_scope: session.metadata.write_scope } : {}),
-        ...input.metadata,
+        ...mergeTurnMetadata(session.metadata, input.metadata),
         sessionRef: session.id,
         turnIndex,
       },
@@ -456,6 +456,7 @@ export class RuntimeAgentSupervisor {
     if (!this.adapters.has(input.engine)) {
       throw new Error(`Agent engine ${input.engine} is not installed in this Runtime Supervisor`);
     }
+    assertToolPolicy(input.engine, input.metadata);
 
     const normalized = await this.validateInput(input);
     const provider = input.providerId ? await this.providers.get(input.providerId) : undefined;

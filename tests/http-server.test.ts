@@ -94,6 +94,18 @@ test("serves execution records, replayable events, and artifact content", async 
     assert.equal(health.storage.ok, true);
     assert.equal(health.storage.driver, "sqlite");
     assert.equal(health.storage.executionCount, 0);
+    for (const endpoint of ["/v1/sessions", "/v1/executions"]) {
+      const denied = await fetch(`${base}${endpoint}`, {
+        method: "POST",
+        headers: { ...headers, "content-type": "application/json" },
+        body: JSON.stringify({
+          instanceId: "instance-http", engine: "sop-native", providerId: "test-provider", workspace,
+          outputDir: path.join(workspace, "denied"), instruction: "Must not run", metadata: { tool_allowlist: [] },
+        }),
+      });
+      assert.equal(denied.status, 403);
+      assert.match(JSON.stringify(await denied.json()), /empty_tool_allowlist_denied/);
+    }
     const response = await fetch(`${base}/v1/executions`, {
       method: "POST",
       headers: { ...headers, "content-type": "application/json" },
