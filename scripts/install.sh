@@ -11,6 +11,7 @@ REF="${SOP_AGENTD_REF:-main}"
 INSTALL_DIR="${SOP_AGENTD_INSTALL_DIR:-/opt/sop-runtime-agentd}"
 PORT="${SOP_AGENTD_PORT:-8789}"
 START_SERVICE=true
+MCP_CONNECTIONS_FILE="${SOP_MCP_CONNECTIONS_MANIFEST:-}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -18,10 +19,15 @@ while [[ $# -gt 0 ]]; do
     --ref) REF="$2"; shift 2 ;;
     --install-dir) INSTALL_DIR="$2"; shift 2 ;;
     --port) PORT="$2"; shift 2 ;;
+    --mcp-connections-file) MCP_CONNECTIONS_FILE="$2"; shift 2 ;;
     --skip-start) START_SERVICE=false; shift ;;
     *) echo "Unknown argument: $1" >&2; exit 2 ;;
   esac
 done
+
+if [[ -n "$MCP_CONNECTIONS_FILE" ]]; then
+  MCP_CONNECTIONS_FILE="$(realpath "$MCP_CONNECTIONS_FILE")"
+fi
 
 for command in git node npm; do
   command -v "$command" >/dev/null 2>&1 || { echo "$command is required" >&2; exit 1; }
@@ -67,6 +73,10 @@ if [[ ! -f /etc/sop-runtime-agentd/agentd.env ]]; then
     printf 'SOP_AGENTD_PROVIDER_DIR=/etc/sop-runtime-agentd/providers\n'
     printf 'SOP_AGENTD_MAX_CONCURRENT=2\n'
   } > /etc/sop-runtime-agentd/agentd.env
+fi
+
+if [[ -n "$MCP_CONNECTIONS_FILE" ]]; then
+  node scripts/install-mcp-connections.mjs "$MCP_CONNECTIONS_FILE"
 fi
 
 if [[ "$START_SERVICE" == true ]]; then

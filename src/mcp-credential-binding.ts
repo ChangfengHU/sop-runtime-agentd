@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import { z } from "zod";
-import { mcpBindingDigest, type McpBinding } from "./mcp-session.js";
+import { mcpBindingDigest, type McpConnection } from "./mcp-session.js";
 
 const installedSchema = z.object({
   bindings: z.array(z.string().regex(/^sha256:[a-f0-9]{64}$/)).max(1000),
@@ -8,7 +8,7 @@ const installedSchema = z.object({
 
 /** Installed machine dependencies pin credential destinations independently of editable catalogs. */
 export async function checkInstalledMcpCredentialBinding(
-  binding: McpBinding,
+  binding: McpConnection,
   file = process.env.SOP_MCP_CREDENTIAL_BINDINGS_FILE || "/etc/sop-runtime-agentd/mcp-credentials.json",
 ): Promise<void> {
   if (!Object.keys(binding.headers).length) return;

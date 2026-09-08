@@ -6,10 +6,13 @@ import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 
 const exactName = z.string().min(1).max(128).regex(/^[a-zA-Z0-9_.-]+$/);
-export const mcpBindingSchema = z.object({
+export const mcpConnectionSchema = z.object({
   server_id: exactName,
   url: z.string().url(),
   headers: z.record(z.string(), z.string().regex(/^vault:[^\s]+$/)).default({}),
+}).strict();
+export type McpConnection = z.infer<typeof mcpConnectionSchema>;
+export const mcpBindingSchema = mcpConnectionSchema.extend({
   tools: z.array(z.object({ name: exactName, schema_digest: z.string().regex(/^sha256:[a-f0-9]{64}$/) }).strict()).min(1).max(100),
 }).strict();
 export type McpBinding = z.infer<typeof mcpBindingSchema>;
@@ -27,7 +30,7 @@ export function mcpSchemaDigest(tool: Pick<Tool, "inputSchema" | "outputSchema">
 export function mcpModelName(id: string): string {
   return `mcp_${createHash("sha256").update(id).digest("hex").slice(0, 40)}`;
 }
-export function mcpBindingDigest(binding: McpBinding): string {
+export function mcpBindingDigest(binding: McpConnection): string {
   return `sha256:${createHash("sha256").update(canonical({ server_id: binding.server_id, url: binding.url, headers: binding.headers })).digest("hex")}`;
 }
 

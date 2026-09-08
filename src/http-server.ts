@@ -6,6 +6,8 @@ import type { RuntimeAgentSupervisor } from "./supervisor.js";
 import { errorMessage, SupervisorError, WebhookRateLimitError } from "./util.js";
 import { listAgentTools } from "./tools-catalog.js";
 
+import { probeMcpConnection } from "./mcp-probe.js";
+
 const WEBHOOK_HEADER_ALLOWLIST = ["x-github-event", "x-event-type", "user-agent"];
 
 const JSON_LIMIT_BYTES = 2 * 1024 * 1024;
@@ -76,6 +78,11 @@ export function createHttpServer(supervisor: RuntimeAgentSupervisor): http.Serve
       }
       if (method === "GET" && url.pathname === "/health") {
         json(response, 200, supervisor.healthSnapshot());
+        return;
+      }
+      if (method === "POST" && url.pathname === "/v1/mcp/probe") {
+        const result = await probeMcpConnection(await readJson(request), AbortSignal.timeout(45_000));
+        json(response, 200, { ok: true, ...result });
         return;
       }
       if (method === "GET" && url.pathname === "/v1/adapters") {

@@ -80,6 +80,13 @@ test("serves execution records, replayable events, and artifact content", async 
   try {
     const unauthorized = await fetch(`${base}/health`);
     assert.equal(unauthorized.status, 401);
+    const probeUnauthorized = await fetch(`${base}/v1/mcp/probe`, { method: "POST", body: "{}" });
+    assert.equal(probeUnauthorized.status, 401);
+    const invalidProbe = await fetch(`${base}/v1/mcp/probe`, { method: "POST", headers, body: JSON.stringify({ server_id: "test", url: "https://example.test/mcp", headers: { authorization: "plaintext-fixture-secret" } }) });
+    assert.equal(invalidProbe.status, 400);
+    const invalidBody = await invalidProbe.text();
+    assert.ok(invalidBody.includes("mcp_connection_invalid"));
+    assert.ok(!invalidBody.includes("plaintext-fixture-secret"));
     const healthResponse = await fetch(`${base}/health`, { headers });
     assert.equal(healthResponse.status, 200);
     const health = (await healthResponse.json()) as {

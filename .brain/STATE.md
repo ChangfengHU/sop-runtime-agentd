@@ -6,6 +6,7 @@ openclaw/dsh/opencode)归一成统一的 执行/会话/事件/审批/webhook 契
 `node:http` 手写路由,`node:sqlite` 持久化。对外承诺 `agentd.runtime`,唯一消费方 sop-ui。
 
 ## 现状
+- 2026-09-08 认证目录/安装接续：Supervisor0.6.1新增只读POST /v1/mcp/probe，父进程解析已安装连接凭据，返回schema与连接摘要；安装脚本接受连接清单并原子生成摘要文件，重复安装无变更。33测试/build通过，源码未部署，Control和SPI桥接需配套。源Vault访问凭据仍沿用既有机器安装，不向普通机自动复制。
 - 2026-09-08 MCP凭据目的地收口：读取机器安装的非秘密连接摘要清单后才允许解析Vault引用，每次调用重检；目录换URL/引用不能自动获得源凭据。30项测试/build通过，包括无网络请求的真实入口拒绝测试。凭据安装自动化、认证目录探针、部署仍待完成。
 - 2026-09-08 后续：Supervisor0.6.0已实现pi MCP父进程代理、schema锁、每次调用源环境/配置核验、Vault引用解析及IPC工具调用。28测试/build通过（真实supervisor/adapter/worker接本地模型+MCP替身）。Control ca5d551/UI 92dd780配套已推送，待发布；旧Control缺接口时拒绝MCP派发。没有管理员体系，没有线上/63操作。完整契约见README「MCP session tools」。
 - 2026-09-08：Supervisor 0.5.1 工具权限收口已开发、本地验证，未部署。空/畸形白名单与缺清单的Agent请求拒绝；续聊取工具交集、保留只读上限/身份快照；非pi引擎拒绝无法执行的工具限制。22测试及build通过，含真实pi worker+本地模型替身；a2a-studio Harness 17测试通过，不是生产63验收。契约见README「Session tool policy」。

@@ -65,7 +65,7 @@ tests. Code verification does not mean a Runtime has been upgraded.
 
 ## MCP session tools
 
-Supervisor `0.6.0` advertises `mcpTools: true` for `sop-native`. The control plane
+Supervisor `0.6.1` advertises `mcpTools: true` for `sop-native`. The control plane
 provides `metadata.mcp_bindings` containing registered server IDs, HTTPS URLs,
 Vault header references and selected tool names with `schema_digest` locks.
 The matching `agent_access_snapshot` and canonical `server_id::tool_name`
@@ -101,7 +101,29 @@ to hash the exact server ID, URL and header references installed for this
 machine. Changing a catalog endpoint or credential reference cannot install
 a new credential destination. Missing, malformed or removed bindings reject
 the next load/call. Public connections with no headers need no credential
-binding file. Installation automation remains a separate integration task.
+binding file. The install command now accepts `--mcp-connections-file /absolute/path/manifest.json`
+(or `SOP_MCP_CONNECTIONS_MANIFEST`). To update an existing installation, run
+`node scripts/install-mcp-connections.mjs /absolute/path/manifest.json` after
+building. The manifest format is:
+
+```json
+{"connections":[{"server_id":"example","url":"https://example.test/mcp","headers":{"authorization":"vault:service:example#authorization"}}]}
+```
+
+This replaces the machine's desired connection set, removes omitted bindings,
+and preserves the old file if validation fails. Reapplying identical input is
+a no-op. It writes only connection digests and never copies the Vault master
+credential. A source host still needs its existing Vault credential installed;
+adding an ordinary Runtime does not distribute source credentials to it.
+
+`POST /v1/mcp/probe` reads an installed connection's tool catalog through the
+same parent-process Vault resolver. The body contains only `server_id`, `url`
+and `headers` references. It runs initialization and paginated `tools/list`,
+never `tools/call` or a model, and rejects credential-bearing schemas. It returns
+schemas plus the connection digest, closes the transport and is guarded by the
+existing supervisor internal token when configured. Health exposes
+`mcpCatalogProbe: true`; the Control Plane routes authenticated discovery only
+to registered source Runtimes. Runtime SPI bridges must forward this new route.
 Upstream credentials are never
 added to session/Execution metadata, worker IPC inputs or tool events.
 

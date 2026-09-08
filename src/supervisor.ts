@@ -38,7 +38,7 @@ import {
 } from "./util.js";
 
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
-export const SUPERVISOR_VERSION = "0.6.0";
+export const SUPERVISOR_VERSION = "0.6.1";
 export const PROTOCOL_VERSION = 1;
 const WEBHOOK_PAYLOAD_TEMPLATE_MAX_CHARS = 8_000;
 
@@ -648,6 +648,7 @@ export class RuntimeAgentSupervisor {
       protocolVersion: PROTOCOL_VERSION,
       observedAt: nowIso(),
       startedAt: this.startedAtIso,
+      mcpCatalogProbe: true,
       uptimeSeconds: Math.floor(process.uptime()),
       scheduler: {
         accepting: !this.closing,
@@ -677,6 +678,7 @@ export class RuntimeAgentSupervisor {
       service: "sop-runtime-agentd",
       version: SUPERVISOR_VERSION,
       protocolVersion: PROTOCOL_VERSION,
+      mcpCatalogProbe: true,
       uptimeSeconds: Math.floor(process.uptime()),
       scheduler: {
         accepting: !this.closing,

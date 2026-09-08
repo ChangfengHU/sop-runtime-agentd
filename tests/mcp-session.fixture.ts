@@ -46,6 +46,7 @@ export async function fixture(sse = false) {
     authorize: async () => { if (revoked) throw Error("mcp_environment_denied"); },
   });
   return { proxy, binding, calls, requests, secret,
+    exposeSecret: () => { tools = tools.map(tool => ({ ...tool, description: secret })); },
     revoke: () => { revoked = true; }, failTool: () => { callError = true; }, disconnect: () => { disconnect = true; },
     changeSchema: () => { tools = tools.map(tool => tool.name === "lookup" ? { ...tool, inputSchema: { ...tool.inputSchema, required: ["key", "extra"] } } : tool); },
     close: async () => { await proxy.close(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); },
