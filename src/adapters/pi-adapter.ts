@@ -91,9 +91,10 @@ export class PiAdapter implements AgentRuntimeAdapter {
       if (mcp) await context.emit({ type: "mcp.binding.applied", status: "running", producer: "pi-agent", subject: { kind: "tool", id: "mcp" }, summary: `Bound ${mcp.tools.length} MCP tools`, data: { tools: mcp.tools.map(({ id, name, schema_digest }) => ({ id, name, schema_digest })) } });
       const apiKey = await this.options.credentialResolver.resolve(execution.provider.credentialRef);
       const sourceWorker = import.meta.url.endsWith(".ts");
+      const workingDirectory = execution.metadata?.workflow_binding ? execution.outputDir : execution.workspace;
       const workerPath = fileURLToPath(new URL(sourceWorker ? "../workers/pi-worker.ts" : "../workers/pi-worker.js", import.meta.url));
       const child = fork(workerPath, [], {
-        cwd: execution.workspace,
+        cwd: workingDirectory,
         ...(sourceWorker ? { execArgv: ["--import", import.meta.resolve("tsx")] } : {}),
         env: {
           ...process.env,
@@ -108,6 +109,7 @@ export class PiAdapter implements AgentRuntimeAdapter {
         executionId: execution.id,
         workspace: execution.workspace,
         outputDir: execution.outputDir,
+        workingDirectory,
         instruction: execution.instruction,
         materials: execution.materials,
         skills,

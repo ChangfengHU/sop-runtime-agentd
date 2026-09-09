@@ -161,8 +161,11 @@ async function run(input: PiWorkerInput): Promise<void> {
     { projectTrusted: true },
   );
   const boundSkills = await readBoundSkills(input.workspace, input.skills ?? (input.skill ? [input.skill] : []));
+  const workingDirectory = input.workingDirectory || input.workspace;
+  send({kind:'event',type:'execution.cwd.applied',subjectKind:'session',subjectId:input.requestedSessionId,
+    summary:'Execution working directory selected',data:{workingDirectory,workspace:input.workspace,outputDir:input.outputDir}});
   const resourceLoader = new DefaultResourceLoader({
-    cwd: input.workspace,
+    cwd: workingDirectory,
     agentDir: input.agentDir,
     settingsManager,
     // 默认关掉自动发现的扩展 —— 普通 Runtime 是裸执行环境。
@@ -236,7 +239,7 @@ async function run(input: PiWorkerInput): Promise<void> {
   }));
   const sdkToolNames = allowedTools.map(id => (input.mcpTools || []).find(tool => tool.id === id)?.name || id);
   const { session } = await createAgentSession({
-    cwd: input.workspace,
+    cwd: workingDirectory,
     agentDir: input.agentDir,
     model,
     thinkingLevel: options.thinking === "high" ? "high" : options.thinking === "low" ? "low" : "medium",

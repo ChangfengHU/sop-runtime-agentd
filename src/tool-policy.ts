@@ -56,7 +56,7 @@ export function mergeTurnMetadata(session: Metadata, turn: Metadata): Metadata {
   if (owns(session, "write_scope") && (readOnly(session.write_scope) || !owns(turn, "write_scope"))) {
     merged.write_scope = session.write_scope;
   }
-  for (const key of ["preset_id", "ops_agent_id", "agent_access_snapshot", "vault_scope", "plugin_id", "mcp_bindings", "skill_bindings"]) {
+  for (const key of ["preset_id", "ops_agent_id", "agent_access_snapshot", "vault_scope", "plugin_id", "mcp_bindings", "skill_bindings", "workflow_binding"]) {
     if (owns(session, key)) merged[key] = session[key];
   }
   return merged;

@@ -5,6 +5,8 @@ export interface PiWorkerInput {
   executionId: string;
   workspace: string;
   outputDir: string;
+  /** Workflow steps resolve relative paths inside their own artifact directory. */
+  workingDirectory?: string;
   instruction: string;
   materials: Material[];
   skill?: SkillBinding;
