@@ -190,6 +190,7 @@ export type CreateExecutionInput = z.infer<typeof createExecutionSchema>;
 export interface AgentCapabilities {
   /** Session-bound MCP tools with parent-process credential handling. */
   mcpTools?: boolean;
+  singleDelegation?: boolean;
   persistentSessions: boolean;
   streamingEvents: boolean;
   toolEvents: boolean;

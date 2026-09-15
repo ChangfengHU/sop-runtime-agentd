@@ -1,3 +1,4 @@
+import {prepareDelegation} from '../delegation-tools.js';
 import { configuredSkillBindings } from "../skill-bindings.js";
 import { fork, type ChildProcess } from "node:child_process";
 import path from "node:path";
@@ -34,6 +35,7 @@ export class PiAdapter implements AgentRuntimeAdapter {
   capabilities(): AgentCapabilities {
     return {
       mcpTools: true,
+      singleDelegation: true,
       persistentSessions: true,
       streamingEvents: true,
       toolEvents: true,
@@ -85,6 +87,7 @@ export class PiAdapter implements AgentRuntimeAdapter {
     if (!execution.provider) {
       throw new Error("sop-native execution requires a Provider Profile");
     }
+    const delegation = prepareDelegation(execution,context.signal);
     const skills = configuredSkillBindings(execution.metadata, execution.skill);
     const mcp: McpSession | undefined = await (this.options.mcpFactory || prepareExecutionMcp)(execution, context.signal);
     try {
@@ -121,7 +124,7 @@ export class PiAdapter implements AgentRuntimeAdapter {
         // 会话级白名单/写权限:supervisor.createTurn 从 session.metadata 合并进 execution.metadata。
         ...(Array.isArray(execution.metadata?.tool_allowlist) ? { toolAllowlist: (execution.metadata.tool_allowlist as unknown[]).map(String) } : {}),
         ...(typeof execution.metadata?.write_scope === "string" ? { writeScope: execution.metadata.write_scope as string } : {}),
-        ...(mcp ? { mcpTools: mcp.tools } : {}),
+        mcpTools: [...(mcp?.tools||[]),...(delegation?.tools||[])],
       };
 
       let stderr = "";
@@ -177,7 +180,8 @@ export class PiAdapter implements AgentRuntimeAdapter {
             }
             let call = mcpCalls.get(message.id);
             if (!call) {
-              if (!mcp || mcpCalls.size >= 1000) call = Promise.resolve({ error: "mcp_tool_not_allowed" });
+              if(delegation?.tools.some(tool=>tool.id===message.toolId)) call=delegation.call(message.toolId,message.arguments).then(result=>({result}),error=>({error:error.message}));
+              else if (!mcp || mcpCalls.size >= 1000) call = Promise.resolve({ error: "mcp_tool_not_allowed" });
               else call = mcp.call(message.toolId, message.arguments).then(result => ({ result }), error => ({ error: error instanceof Error && /^mcp_[a-z_]+$/.test(error.message) ? error.message : "mcp_tool_call_failed" }));
               mcpCalls.set(message.id, call);
             }
