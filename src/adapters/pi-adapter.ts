@@ -162,6 +162,7 @@ export class PiAdapter implements AgentRuntimeAdapter {
 
         child.on("message", (message: PiWorkerMessage) => {
           if (message.kind === "event") {
+            if(delegation?.submitted && message.type === "model.output.delta")return;
             emitChain = emitChain.then(async () => {
               await context.emit({
                 type: message.type,
@@ -188,7 +189,7 @@ export class PiAdapter implements AgentRuntimeAdapter {
             void call.then(result => { if (!settled && child.connected) child.send({ kind: "mcp_result", id: message.id, ...result }); });
           } else if (message.kind === "result") {
             void emitChain.then(() => {
-              settle(() => resolve(message));
+              settle(() => resolve(delegation?.submitted ? {...message,responseText:"委派已提交，正在等待子 Agent 的执行回执。完成后会自动返回本会话。",reasoningText:undefined} : message));
             });
           } else {
             void emitChain.then(() => settle(() => reject(new Error(message.message))));

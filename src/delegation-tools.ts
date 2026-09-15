@@ -12,13 +12,15 @@ export function prepareDelegation(execution:Pick<ExecutionRecord,'id'|'sessionId
  if(!meta.delegation_context||meta.delegation_binding||!snapshot?.runtime_id)return undefined;
  const tools=delegationTools.filter(tool=>(meta.tool_allowlist as string[]|undefined)?.includes(tool.id));
  if(!tools.length)return undefined;
- return {tools,async call(name:string,args:unknown){
+ let submitted=false;
+ return {tools,get submitted(){return submitted},async call(name:string,args:unknown){
   if(!tools.some(t=>t.id===name))throw Error('delegation_tool_denied');
   const origin=process.env.SOP_MCP_CONTROL_URL||'https://control.vyibc.com';
   if(new URL(origin).protocol!=='https:')throw Error('delegation_endpoint_invalid');
   const response=await transport(new URL('/api/agent-delegations/tools',origin),{method:'POST',redirect:'error',signal:AbortSignal.any([signal,AbortSignal.timeout(60000)]),headers:{'content-type':'application/json'},body:JSON.stringify({runtime_id:snapshot.runtime_id,session_id:execution.sessionId,execution_id:execution.id,tool:name,arguments:args})});
   const result=await response.json() as {ok?:boolean;error?:string;result?:unknown};
   if(!response.ok||!result.ok)throw Error(/^delegation_[a-z_:]+$/.test(result.error||'')?result.error:'delegation_request_failed');
+  if(name==='delegate_agent'&&['queued','running'].includes(String((result.result as {status?:string})?.status)))submitted=true;
   return {content:[{type:'text',text:JSON.stringify(result.result)}]};
  }};
 }
