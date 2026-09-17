@@ -13,6 +13,9 @@ export const engineIdSchema = z.enum([
 
 export type EngineId = z.infer<typeof engineIdSchema>;
 
+export const reasoningCapabilitySchema = z.enum(["streaming", "final", "unsupported"]);
+export type ReasoningCapability = z.infer<typeof reasoningCapabilitySchema>;
+
 export const executionStatusSchema = z.enum([
   "queued",
   "running",
@@ -46,6 +49,8 @@ export const providerProfileSchema = z.object({
   model: z.string().min(1),
   credentialRef: z.string().min(1),
   options: z.record(z.string(), z.unknown()).default({}),
+  /** Explicit model/provider contract. Omitted profiles are treated as unsupported. */
+  reasoning: reasoningCapabilitySchema.optional(),
 });
 
 export type ProviderProfile = z.infer<typeof providerProfileSchema>;
@@ -202,6 +207,8 @@ export interface AgentCapabilities {
   skills: boolean;
   configuredSkills?: boolean;
   localWorkspace: boolean;
+  /** Best transport capability of the adapter. Providers may narrow this further. */
+  reasoning?: ReasoningCapability;
 }
 
 export interface ArtifactRecord {

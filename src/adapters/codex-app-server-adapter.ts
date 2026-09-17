@@ -25,6 +25,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+export function codexReasoningItemText(item: Record<string, unknown>): string {
+  if (String(item.type || "") !== "reasoning") return "";
+  const parts = (value: unknown): string => Array.isArray(value)
+    ? value.map((part) => isRecord(part) ? String(part.text || "") : String(part || "")).filter(Boolean).join("\n")
+    : "";
+  return parts(item.summary) || (typeof item.text === "string" ? item.text : "") || parts(item.content);
+}
+
 /**
  * Codex adapter over the **resident app-server** (`codex app-server`), not one-shot `codex exec`.
  *
@@ -61,6 +69,7 @@ export class CodexAppServerAdapter implements AgentRuntimeAdapter {
       nativeCancellation: true,
       skills: false,
       localWorkspace: true,
+      reasoning: "streaming",
     };
   }
 
@@ -213,6 +222,7 @@ export class CodexAppServerAdapter implements AgentRuntimeAdapter {
     const modelSubject = execution.provider?.model ?? "codex";
     let responseText = "";
     let reasoningText = "";
+    let reasoningSource: "summary" | "text" | "" = "";
     let turnError = "";
     let emitChain: Promise<unknown> = Promise.resolve();
     let settleTurn: (() => void) | null = null;
@@ -238,14 +248,36 @@ export class CodexAppServerAdapter implements AgentRuntimeAdapter {
         );
         return;
       }
+      if (event.method === "item/reasoning/summaryTextDelta" || event.method === "item/reasoning/textDelta") {
+        const text = String(params?.delta || "");
+        if (!text) return;
+        const source = event.method === "item/reasoning/summaryTextDelta" ? "summary" : "text";
+        // Prefer the public summary when app-server supplies both summary and raw reasoning text.
+        if (reasoningSource === "summary" && source === "text") return;
+        if (source === "summary" && reasoningSource === "text") reasoningText = "";
+        reasoningSource = source;
+        reasoningText += text;
+        emitChain = emitChain.then(() =>
+          context.emit({
+            type: "model.reasoning.delta",
+            status: "running",
+            producer: "codex",
+            subject: { kind: "model", id: modelSubject },
+            summary: "Codex generated reasoning summary",
+            data: { text },
+          }),
+        );
+        return;
+      }
       if (event.method === "item/completed" && isRecord(params?.item)) {
         const item = params.item as Record<string, any>;
         const type = String(item.type || "");
         if (type === "agentMessage" && typeof item.text === "string" && item.text) {
           // The completed item carries the whole message; prefer it over accumulated deltas.
           responseText = item.text;
-        } else if (type === "reasoning" && typeof item.text === "string" && item.text) {
-          reasoningText = reasoningText ? `${reasoningText}\n\n${item.text}` : item.text;
+        } else if (type === "reasoning") {
+          const completed = codexReasoningItemText(item);
+          if (completed) reasoningText = completed;
         } else if (type === "commandExecution" || type === "fileChange" || type === "mcpToolCall") {
           const title = String(item.command || item.title || type);
           emitChain = emitChain.then(() =>
@@ -293,7 +325,7 @@ export class CodexAppServerAdapter implements AgentRuntimeAdapter {
 
     try {
       const prompt = `${execution.instruction}${outputDirective(execution)}`;
-      await client.request("turn/start", { threadId, input: [{ type: "text", text: prompt }] });
+      await client.request("turn/start", { threadId, input: [{ type: "text", text: prompt }], summary: "auto" });
       await finished;
       await emitChain;
       if (context.signal.aborted) throw new Error("Codex turn was cancelled");

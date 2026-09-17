@@ -94,6 +94,7 @@ export class AcpAdapter implements AgentRuntimeAdapter {
       nativeCancellation: true,
       skills: false,
       localWorkspace: true,
+      reasoning: "streaming",
     };
   }
 

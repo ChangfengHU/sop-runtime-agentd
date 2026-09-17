@@ -114,6 +114,7 @@ export class OpenclawAdapter implements AgentRuntimeAdapter {
       nativeCancellation: true,
       skills: false,
       localWorkspace: true,
+      reasoning: "unsupported",
     };
   }
 

@@ -19,6 +19,8 @@ function outputDirective(execution: { skill?: unknown; outputDir: string }): str
 const DSH_WEB_URL = (process.env.DSH_WEB_URL || "http://127.0.0.1:3080").replace(/\/+$/u, "");
 const DSH_WEB_COOKIE_FILE = process.env.DSH_WEB_COOKIE_FILE || "/etc/sop-runtime-agentd/credentials/dsh-web.cookie";
 const DSH_TURN_TIMEOUT_MS = Number(process.env.DSH_TURN_TIMEOUT_MS || 180_000);
+const REASONING_TEXT_MAX_CHARS = 80_000;
+const REASONING_TEXT_TRUNCATED_CHARS = 60_000;
 
 /** `POST /api/<method>` 的信封;method 必须与路径末段一致,否则服务端判 bad-request。 */
 interface RpcEnvelope {
@@ -40,6 +42,14 @@ interface MuxFrame {
 interface DshPage { records?: Array<{ type?: string; event?: MuxFrame["event"] }>; events?: Array<{ event?: MuxFrame["event"] }> }
 interface DshSessionList { items?: Array<{ sessionId?: string; projections?: { asOfSeq?: number } }> }
 const pageEvents = (page: DshPage) => (page.records || page.events || []).map(entry => entry.event || {});
+
+export function dshAssistantContent(content: unknown): { responseText: string; reasoningText: string } {
+  const blocks = Array.isArray(content) ? content as Array<{ type?: string; text?: string }> : [];
+  return {
+    responseText: blocks.filter((block) => block.type === "text").map((block) => block.text || "").join("").trim(),
+    reasoningText: blocks.filter((block) => block.type === "reasoning").map((block) => block.text || "").join("").trim(),
+  };
+}
 
 export class DshWebClient {
   constructor(private readonly baseUrl: string, private readonly cookieFile = DSH_WEB_COOKIE_FILE) {}
@@ -119,6 +129,9 @@ export class DshAdapter implements AgentRuntimeAdapter {
       nativeCancellation: true,
       skills: false,
       localWorkspace: true,
+      // The web session log persists complete reasoning blocks on assistant/message.
+      // It does not expose token deltas through the page RPC used by this adapter.
+      reasoning: "final",
     };
   }
 
@@ -210,11 +223,12 @@ export class DshAdapter implements AgentRuntimeAdapter {
       const current = await this.client.page(sessionId);
       const events = pageEvents(current).filter(event => Number(event.seq ?? -1) > baseline);
       let responseText = "";
+      let reasoningText = "";
       for (const event of events) {
         if (event.type === "assistant/message") {
-          const blocks = (event.data?.message?.content || []) as Array<{ type?: string; text?: string }>;
-          const joined = blocks.filter(block => block.type === "text").map(block => block.text || "").join("").trim();
-          if (joined) responseText = joined;
+          const content = dshAssistantContent(event.data?.message?.content);
+          if (content.responseText) responseText = content.responseText;
+          if (content.reasoningText) reasoningText = content.reasoningText;
         }
       }
       const ended = [...events].reverse().find(event => event.type === "turn/end");
@@ -222,9 +236,13 @@ export class DshAdapter implements AgentRuntimeAdapter {
       const reason = String(ended.data?.reason?.kind || "");
       if (reason !== "completed") throw new Error(`DeepSeek Harness turn ended with reason=${reason || "unknown"}`);
       if (!responseText) throw new Error("DeepSeek Harness completed the turn but produced no answer");
+      if (reasoningText.length > REASONING_TEXT_MAX_CHARS) reasoningText = reasoningText.slice(-REASONING_TEXT_TRUNCATED_CHARS);
+      if (reasoningText) {
+        await context.emit({ type: "model.reasoning.delta", status: "running", producer: "deepseek-harness", subject: { kind: "model", id: modelSubject }, summary: "DeepSeek Harness produced reasoning text", data: { text: reasoningText } });
+      }
       await context.emit({ type: "model.output.delta", status: "running", producer: "deepseek-harness", subject: { kind: "model", id: modelSubject }, summary: "DeepSeek Harness produced the final answer", data: { text: responseText } });
       await context.emit({ type: "agent.turn.settled", status: "running", producer: "deepseek-harness", subject: { kind: "session", id: sessionId }, summary: "DeepSeek Harness finished processing the Node request", data: {} });
-      return { sessionId, nativeRunId: newId("dsh-run"), responseText };
+      return { sessionId, nativeRunId: newId("dsh-run"), responseText, ...(reasoningText ? { reasoningText } : {}) };
     }
     throw new Error(`DeepSeek Harness turn timed out after ${Math.round(DSH_TURN_TIMEOUT_MS / 1000)}s`);
   }

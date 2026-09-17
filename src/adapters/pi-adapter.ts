@@ -47,6 +47,7 @@ export class PiAdapter implements AgentRuntimeAdapter {
       skills: true,
       configuredSkills: true,
       localWorkspace: true,
+      reasoning: "streaming",
     };
   }
 

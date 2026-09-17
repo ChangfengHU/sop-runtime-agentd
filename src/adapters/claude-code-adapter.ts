@@ -75,6 +75,7 @@ export class ClaudeCodeAdapter implements AgentRuntimeAdapter {
       nativeCancellation: true,
       skills: false,
       localWorkspace: true,
+      reasoning: "streaming",
     };
   }
 
