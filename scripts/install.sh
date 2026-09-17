@@ -69,11 +69,11 @@ cd "$INSTALL_DIR"
 npm ci
 npm run build
 
-# Keep the interactive Pi CLI on the same package version used by Agentd. The
-# CLI has its own user-level model/auth files, so installing the SDK alone does
-# not make `pi` usable from an SSH shell.
-PI_CLI_VERSION="$(node -p "require('./package.json').dependencies['@earendil-works/pi-coding-agent']")"
-npm install -g --ignore-scripts "@earendil-works/pi-coding-agent@${PI_CLI_VERSION}"
+# Expose the exact Pi package already installed for Agentd as the machine CLI.
+# This keeps one installation/version while still making `pi` available in a
+# normal login shell.
+test -x "$INSTALL_DIR/node_modules/.bin/pi"
+ln -sfn "$INSTALL_DIR/node_modules/.bin/pi" /usr/local/bin/pi
 
 install -d -m 0700 /etc/sop-runtime-agentd/credentials
 install -d -m 0755 /etc/sop-runtime-agentd/providers
