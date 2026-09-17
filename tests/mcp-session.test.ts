@@ -56,3 +56,13 @@ test("startup refuses changed schemas, plaintext credentials and unbound selecti
     } finally { await f.close(); }
   }
 });
+
+test("aborted turn cannot dispatch a new side-effecting MCP call", async () => {
+  const f = await fixture();
+  try {
+    await f.proxy.prepare([f.binding], ["records::lookup"]);
+    const turn = new AbortController(); turn.abort();
+    await assert.rejects(f.proxy.call("records::lookup", { key: "one" }, turn.signal), /mcp_tool_call_failed/);
+    assert.equal(f.calls.length, 0);
+  } finally { await f.close(); }
+});

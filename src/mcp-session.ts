@@ -36,7 +36,7 @@ export function mcpBindingDigest(binding: McpConnection): string {
 
 type Options = {
   resolveCredential(reference: string): Promise<string>;
-  authorize(binding: McpBinding, tool: string): Promise<void>;
+  authorize(binding: McpBinding, tool: string, signal?: AbortSignal): Promise<void>;
   signal: AbortSignal;
   // Used only by loopback fixtures; execution metadata cannot enable local HTTP.
   allowLocalHttp?: boolean;
@@ -97,7 +97,7 @@ export class McpSession {
           if (secrets.some(secret => JSON.stringify(tool).includes(secret))) throw Error("mcp_credential_exposed_in_schema");
           this.validators.getValidator(tool.inputSchema as Parameters<AjvJsonSchemaValidator["getValidator"]>[0]); // Unsupported schemas fail before model dispatch.
           const id = `${binding.server_id}::${tool.name}`;
-          this.tools.push({ id, name: mcpModelName(id), description: tool.description || id, inputSchema: tool.inputSchema, schema_digest: selectedTool.schema_digest });
+          this.tools.push({ id, name: mcpModelName(id), description: `${id}: ${tool.description || id}`, inputSchema: tool.inputSchema, schema_digest: selectedTool.schema_digest });
         }
       }
       for (const id of allowlist.filter((name) => name.includes("::"))) {
@@ -110,12 +110,12 @@ export class McpSession {
     }
   }
 
-  private async list(connection: Connection): Promise<Tool[]> {
+  private async list(connection: Connection, signal = this.options.signal): Promise<Tool[]> {
     const tools: Tool[] = [];
     const cursors = new Set<string>();
     let cursor: string | undefined;
     for (let page = 0; page < 20; page++) {
-      const result = await connection.client.listTools(cursor ? { cursor } : {}, { timeout: 15_000, signal: this.options.signal });
+      const result = await connection.client.listTools(cursor ? { cursor } : {}, { timeout: 15_000, signal });
       tools.push(...result.tools);
       if (tools.length > 1000 || new Set(tools.map((tool) => tool.name)).size !== tools.length) throw Error("mcp_invalid_tool_catalog");
       if (!result.nextCursor) return tools;
@@ -126,7 +126,20 @@ export class McpSession {
     throw Error("mcp_tool_catalog_limit");
   }
 
-  async call(id: string, args: unknown): Promise<unknown> {
+  async verify(): Promise<void> {
+    for (const connection of this.connections.values()) {
+      const current = await this.list(connection);
+      for (const tool of this.tools.filter(tool => tool.id.startsWith(connection.binding.server_id + "::"))) {
+        const name = tool.id.slice(connection.binding.server_id.length + 2);
+        await this.options.authorize(connection.binding, name);
+        const actual = current.find(entry => entry.name === name);
+        if (!actual || mcpSchemaDigest(actual) !== tool.schema_digest) throw Error("mcp_tool_schema_changed");
+      }
+    }
+  }
+
+  async call(id: string, args: unknown, turnSignal?: AbortSignal): Promise<unknown> {
+    const signal = turnSignal ? AbortSignal.any([this.options.signal, turnSignal]) : this.options.signal;
     const selected = this.tools.find((tool) => tool.id === id);
     if (!selected) throw Error("mcp_tool_not_allowed");
     const serverId = id.split("::")[0]!;
@@ -134,12 +147,15 @@ export class McpSession {
     if (!connection) throw Error("mcp_session_closed");
     const toolName = id.slice(serverId.length + 2);
     try {
-      await this.options.authorize(connection.binding, toolName);
-      const current = (await this.list(connection)).find((tool) => tool.name === toolName);
+      signal.throwIfAborted();
+      await this.options.authorize(connection.binding, toolName, signal);
+      signal.throwIfAborted();
+      const current = (await this.list(connection, signal)).find((tool) => tool.name === toolName);
       if (!current || mcpSchemaDigest(current) !== selected.schema_digest) throw Error("mcp_tool_schema_changed");
       if (!this.validators.getValidator(selected.inputSchema as Parameters<AjvJsonSchemaValidator["getValidator"]>[0])(args).valid) throw Error("mcp_tool_arguments_invalid");
       // Never retry tools/call: an interrupted reply is not proof that no side effect occurred.
-      const result = await connection.client.callTool({ name: toolName, arguments: args as Record<string, unknown> }, undefined, { timeout: 60_000, signal: this.options.signal });
+      signal.throwIfAborted();
+      const result = await connection.client.callTool({ name: toolName, arguments: args as Record<string, unknown> }, undefined, { timeout: 60_000, signal });
       if (result.isError) throw Error("mcp_tool_reported_error");
       let text = JSON.stringify(result);
       if (text.length > 2_000_000) throw Error("mcp_result_too_large");

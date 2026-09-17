@@ -81,7 +81,9 @@ export class AcpClient {
     if (typeof message !== "object" || message === null) return;
 
     if (message.id !== undefined && message.method) {
-      void this.answerAgentRequest(message);
+      void this.answerAgentRequest(message).catch(() => {
+        this.send({ jsonrpc: "2.0", id: message.id, error: { code: -32603, message: "Agent callback failed" } });
+      });
       return;
     }
     if (message.id !== undefined) {
@@ -108,7 +110,7 @@ export class AcpClient {
   private async answerAgentRequest(message: any): Promise<void> {
     const method = String(message.method || "");
     if (this.requestHandler) {
-      const custom = this.requestHandler(method, (message.params || {}) as Record<string, unknown>);
+      const custom = await this.requestHandler(method, (message.params || {}) as Record<string, unknown>);
       if (custom !== undefined) {
         this.send({ jsonrpc: "2.0", id: message.id, result: custom });
         return;

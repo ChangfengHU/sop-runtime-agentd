@@ -188,6 +188,8 @@ export const createExecutionSchema = z.object({
 export type CreateExecutionInput = z.infer<typeof createExecutionSchema>;
 
 export interface AgentCapabilities {
+  /** Dedicated process plugin binding with catalog-locked parent MCP proxy. */
+  pluginBindings?: boolean;
   /** Session-bound MCP tools with parent-process credential handling. */
   mcpTools?: boolean;
   singleDelegation?: boolean;

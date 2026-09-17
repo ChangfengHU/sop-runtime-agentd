@@ -6,6 +6,7 @@ openclaw/dsh/opencode)归一成统一的 执行/会话/事件/审批/webhook 契
 `node:http` 手写路由,`node:sqlite` 持久化。对外承诺 `agentd.runtime`,唯一消费方 sop-ui。
 
 ## 现状
+- 2026-09-16：feature/session-plugin-bindings 开发分支（未部署）新增内部鉴权插件绑定POST/GET；独立Codex进程、完整固定SHA包、技能发现、父进程MCP/schema/Vault代理、显式continuation与原配置核验。全量46测试及build通过，真实0.154.0非模型协议/设置保留探针通过；生产模型/视频/上游服务未验。详见 docs/session-plugin-bindings.md。
 - 2026-09-08 安装升级修复：分支安装优先取fetch后的origin SHA，避免本地旧main导致升级无效；新增--resolve-ref-only只解析待安装提交，保留固定SHA/tag回滚。真实临时Git仓库回归与build/bash语法检查通过；认证目录配套Control55719c1、bridgeb42d25f已推送，本地跨组件联调通过，仍未部署。
 - 2026-09-08 认证目录/安装接续：Supervisor0.6.1新增只读POST /v1/mcp/probe，父进程解析已安装连接凭据，返回schema与连接摘要；安装脚本接受连接清单并原子生成摘要文件，重复安装无变更。33测试/build通过，源码未部署，Control和SPI桥接需配套。源Vault访问凭据仍沿用既有机器安装，不向普通机自动复制。
 - 2026-09-08 MCP凭据目的地收口：读取机器安装的非秘密连接摘要清单后才允许解析Vault引用，每次调用重检；目录换URL/引用不能自动获得源凭据。30项测试/build通过，包括无网络请求的真实入口拒绝测试。凭据安装自动化、认证目录探针、部署仍待完成。

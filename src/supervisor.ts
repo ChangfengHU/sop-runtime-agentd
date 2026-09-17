@@ -1,3 +1,6 @@
+import { pluginBindingRequestSchema, installPlugin, type PluginBinding } from "./plugin-bindings.js";
+import { CodexAppServerAdapter } from "./adapters/codex-app-server-adapter.js";
+import { prepareExecutionMcp } from "./mcp-access.js";
 import { configuredSkillBindings, readBoundSkills } from "./skill-bindings.js";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
@@ -39,7 +42,7 @@ import {
 } from "./util.js";
 
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
-export const SUPERVISOR_VERSION = "0.6.3";
+export const SUPERVISOR_VERSION = "0.7.0";
 export const PROTOCOL_VERSION = 1;
 const WEBHOOK_PAYLOAD_TEMPLATE_MAX_CHARS = 8_000;
 
@@ -66,6 +69,7 @@ export class RuntimeAgentSupervisor {
   private readonly abortControllers = new Map<string, AbortController>();
   private activeCount = 0;
   private closing = false;
+  private readonly sessionMutations = new Set<string>();
 
   constructor(
     readonly config: AgentdConfig,
@@ -217,7 +221,93 @@ export class RuntimeAgentSupervisor {
     return this.store.listExecutionsBySession(sessionId, limit);
   }
 
+  async bindSessionPlugin(sessionId: string, rawInput: unknown): Promise<PluginBinding> {
+    const session = this.requiredSession(sessionId);
+    const input = pluginBindingRequestSchema.parse(rawInput);
+    if (this.sessionMutations.has(sessionId)) throw new SupervisorError("session_busy", 409);
+    const active = session.activeExecutionId ? this.store.getExecution(session.activeExecutionId) : undefined;
+    if (session.status === "closed" || (active && !this.isTerminal(active.status))) throw new SupervisorError("session_busy", 409);
+    const adapter = this.adapters.get(session.engine);
+    if (!(adapter instanceof CodexAppServerAdapter)) throw new SupervisorError("plugin_engine_unsupported", 409);
+    const fingerprint = createHash("sha256").update(JSON.stringify(input)).digest("hex");
+    const current = session.metadata.plugin_binding as PluginBinding | undefined;
+    if (current?.status === "ready" && session.metadata.plugin_binding_fingerprint === fingerprint && adapter.bindingAlive(sessionId)) {
+      this.sessionMutations.add(sessionId);
+      try {
+        await adapter.verifySessionBinding(sessionId);
+        return current;
+      } catch {
+        const failed: PluginBinding = { ...current, status: "not_ready", checks: [...current.checks, { name: "refresh", status: "failed", detail: "plugin_binding_revalidation_failed" }] };
+        session.metadata.plugin_binding = failed; this.store.saveSession(session); return failed;
+      } finally { this.sessionMutations.delete(sessionId); }
+    }
+    // A fresh dedicated app-server cannot silently discard an existing conversation or switch its auth.
+    if ((session.turnCount || session.nativeSessionId) && !input.allowContinuation) throw new SupervisorError("plugin_binding_requires_continuation", 409);
+    const previousTurns = this.store.listExecutionsBySession(sessionId, 1000);
+    if (previousTurns.length !== session.turnCount) throw new SupervisorError("plugin_continuation_history_incomplete", 409);
+    const continuation = previousTurns.length ? JSON.stringify(previousTurns.map(turn => ({ user: turn.instruction, assistant: turn.responseText, status: turn.status }))) : "";
+    if (Buffer.byteLength(continuation) > 500_000) throw new SupervisorError("plugin_continuation_history_too_large", 409);
+    assertToolPolicy(session.engine, session.metadata);
+    this.sessionMutations.add(sessionId);
+    const binding: PluginBinding = { status: "not_ready", sessionId, pluginId: input.plugin.id, commit: input.plugin.commit, runtimeId: input.runtimeId || input.agentAccessSnapshot?.runtime_id || "", commands: [], checks: [] };
+    const check = (name: string, detail: string) => binding.checks.push({ name, status: "passed", detail });
+    let installed: Awaited<ReturnType<typeof installPlugin>> | undefined;
+    let mcp: Awaited<ReturnType<typeof prepareExecutionMcp>>;
+    let home: string | undefined;
+    try {
+      if (input.runtimeId && input.agentAccessSnapshot && input.runtimeId !== input.agentAccessSnapshot.runtime_id) throw Error("plugin_runtime_mismatch");
+      if (input.plugin.mcps.length && !input.mcpBindings.length) throw Error("plugin_mcp_bindings_missing");
+      const allTools = input.mcpBindings.flatMap(server => server.tools.map(tool => `${server.server_id}::${tool.name}`));
+      if (new Set(input.toolAllowlist).size !== input.toolAllowlist.length || input.toolAllowlist.length !== allTools.length || allTools.some(tool => !input.toolAllowlist.includes(tool))) throw Error("plugin_mcp_allowlist_mismatch");
+      const settings = await adapter.sessionBindingSettings(sessionId, session.workspace, session.nativeSessionId);
+      check("permissions", `Model ${settings.model} and reasoning effort retained; workspace-write sandbox/network settings must match prior native thread. Shell escalation is declined. Render/network workload not tested.`);
+      installed = await installPlugin(input.plugin, path.join(this.config.dataDir, "session-plugins", sessionId));
+      check("package", "Complete GitHub tree fetched and SHA verified; symlinks/submodules rejected.");
+      home = await fs.mkdtemp(path.join(this.config.dataDir, "session-plugins", sessionId, "home-"));
+      await fs.mkdir(path.join(home, ".codex"), { mode: 0o700 });
+      // Reuse only machine Codex authentication, never its MCP configuration or other environment secrets.
+      const sourceAuth = path.join(process.env.CODEX_HOME || path.join(os.homedir(), ".codex"), "auth.json");
+      try { await fs.copyFile(sourceAuth, path.join(home, ".codex", "auth.json")); await fs.chmod(path.join(home, ".codex", "auth.json"), 0o600); }
+      catch (error) { if (!process.env.OPENAI_API_KEY) throw Error("plugin_codex_auth_unavailable"); }
+      check("isolation", "Dedicated app-server and CODEX_HOME; no shared MCP configuration mutation.");
+      mcp = await prepareExecutionMcp({ metadata: { mcp_bindings: input.mcpBindings, tool_allowlist: input.toolAllowlist, agent_access_snapshot: input.agentAccessSnapshot } }, new AbortController().signal);
+      check("mcp", `${mcp?.tools.length || 0} catalog-locked tools prepared through parent proxy; every call rechecks policy and schema.`);
+      await adapter.bindSession({ sessionId, workspace: session.workspace, home, skills: installed.skills, mcp, continuation, packageDirectory: installed.directory, settings, skillNames: input.plugin.skills.map(skill => skill.id) });
+      check("thread", "Dedicated thread/start accepted dynamic tools; native MCP status is empty.");
+      check("skills", `${installed.skills.length} declared skills discovered enabled by skills/list.`);
+      if (continuation) check("continuation", `${previousTurns.length} platform-visible turns retained as untrusted user/assistant transcript for the first new turn. New isolated native thread; no hidden reasoning/tool-history restore.`);
+      binding.commands = input.plugin.skills.map(skill => skill.id);
+      binding.status = "ready";
+    } catch (error) {
+      await mcp?.close();
+      if (home) await fs.rm(home, { recursive: true, force: true });
+      if (installed) await fs.rm(installed.directory, { recursive: true, force: true });
+      // Do not persist raw network/process errors that could include credential material.
+      const message = errorMessage(error);
+      binding.checks.push({ name: "binding", status: "failed", detail: /^(plugin|mcp)_[a-z_]+$/.test(message) ? message : "plugin_binding_failed" });
+    } finally {
+      session.metadata = { ...session.metadata, plugin_binding_last_attempt: binding,
+        ...(binding.status === "ready" ? { plugin_binding: binding, plugin_binding_fingerprint: fingerprint } : {}),
+      };
+      this.store.saveSession(session);
+      this.sessionMutations.delete(sessionId);
+    }
+    return binding;
+  }
+
+  getSessionPluginBinding(sessionId: string, pluginId: string): PluginBinding | undefined {
+    const session = this.requiredSession(sessionId);
+    const active = session.metadata.plugin_binding as PluginBinding | undefined;
+    const attempted = session.metadata.plugin_binding_last_attempt as PluginBinding | undefined;
+    const binding = active?.pluginId === pluginId ? active : attempted?.pluginId === pluginId ? attempted : undefined;
+    if (!binding) return undefined;
+    const adapter = this.adapters.get(session.engine);
+    if (binding.status === "ready" && (!(adapter instanceof CodexAppServerAdapter) || !adapter.bindingAlive(sessionId))) return { ...binding, status: "not_ready", checks: [...binding.checks, { name: "liveness", status: "failed", detail: "Rebind required after app-server exit or runtime restart." }] };
+    return binding;
+  }
+
   async closeSession(sessionId: string): Promise<SessionRecord> {
+    if (this.sessionMutations.has(sessionId)) throw new SupervisorError("session_busy", 409);
     const session = this.requiredSession(sessionId);
     if (session.status === "closed") {
       return session;
@@ -231,6 +321,8 @@ export class RuntimeAgentSupervisor {
         );
       }
     }
+    const adapter = this.adapters.get(session.engine);
+    if (adapter instanceof CodexAppServerAdapter) await adapter.unbindSession(sessionId);
     session.status = "closed";
     session.activeExecutionId = "";
     session.lastActivityAt = nowIso();
@@ -395,7 +487,17 @@ export class RuntimeAgentSupervisor {
     return { executionId: execution.id, sessionId: session.id };
   }
 
-  async createTurn(
+  async createTurn(sessionId: string, rawInput: unknown): Promise<{ execution: ExecutionRecord; created: boolean; session: SessionRecord }> {
+    if (this.sessionMutations.has(sessionId)) throw new SupervisorError("session_busy", 409);
+    const session = this.requiredSession(sessionId);
+    const binding = session.metadata.plugin_binding as PluginBinding | undefined;
+    if (binding && this.getSessionPluginBinding(sessionId, binding.pluginId)?.status !== "ready") throw new SupervisorError("plugin_binding_not_ready", 409);
+    this.sessionMutations.add(sessionId);
+    try { return await this.createTurnUnlocked(sessionId, rawInput); }
+    finally { this.sessionMutations.delete(sessionId); }
+  }
+
+  private async createTurnUnlocked(
     sessionId: string,
     rawInput: unknown,
   ): Promise<{ execution: ExecutionRecord; created: boolean; session: SessionRecord }> {
@@ -708,6 +810,9 @@ export class RuntimeAgentSupervisor {
   async close(): Promise<void> {
     this.closing = true;
     await Promise.all([...this.abortControllers.keys()].map(async (id) => await this.cancel(id)));
+    for (const adapter of this.adapters.values()) {
+      if (adapter instanceof CodexAppServerAdapter) await adapter.close();
+    }
   }
 
   private async validateInput(input: CreateExecutionInput): Promise<{

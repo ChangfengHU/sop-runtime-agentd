@@ -1,0 +1,20 @@
+{
+  "plugin": {
+    "id": "sample",
+    "repo": "https://github.com/example/plugin.git",
+    "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "root": "plugins/sample",
+    "skills": [{"id": "one", "path": "skills/one"}],
+    "mcps": [{"id": "records"}]
+  },
+  "mcpBindings": [{
+    "server_id": "records",
+    "url": "https://mcp.example.invalid/mcp",
+    "headers": {"authorization": "vault:records#token"},
+    "tools": [{"name": "lookup", "schema_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"}]
+  }],
+  "toolAllowlist": ["records::lookup"],
+  "agentAccessSnapshot": {"agent_id": "reader", "agent_version": 1, "runtime_id": "runtime"},
+  "runtimeId": "runtime",
+  "allowContinuation": true
+}

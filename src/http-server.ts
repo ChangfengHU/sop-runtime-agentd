@@ -125,6 +125,20 @@ export function createHttpServer(supervisor: RuntimeAgentSupervisor): http.Serve
         });
         return;
       }
+      const pluginBindingMatch = matches(url.pathname, /^\/v1\/sessions\/([^/]+)\/plugin-bindings(?:\/([^/]+))?$/u);
+      if (pluginBindingMatch && (method === "POST" || method === "GET")) {
+        if (!supervisor.config.internalToken) { json(response, 503, { error: "plugin_binding_internal_auth_required" }); return; }
+        const sessionId = decodeURIComponent(pluginBindingMatch[1]!);
+        if (method === "POST" && !pluginBindingMatch[2]) {
+          json(response, 200, { binding: await supervisor.bindSessionPlugin(sessionId, await readJson(request)) });
+          return;
+        }
+        if (method === "GET" && pluginBindingMatch[2]) {
+          const binding = supervisor.getSessionPluginBinding(sessionId, decodeURIComponent(pluginBindingMatch[2]));
+          json(response, binding ? 200 : 404, binding ? { binding } : { error: "not_found" });
+          return;
+        }
+      }
       const sessionCloseMatch = matches(url.pathname, /^\/v1\/sessions\/([^/]+)\/close$/u);
       if (method === "POST" && sessionCloseMatch) {
         json(response, 200, { session: await supervisor.closeSession(decodeURIComponent(sessionCloseMatch[1] || "")) });
