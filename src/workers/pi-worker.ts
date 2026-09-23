@@ -312,6 +312,11 @@ async function run(input: PiWorkerInput): Promise<void> {
     if (finalReasoning !== undefined) {
       reasoningText = reasoningText ? `${reasoningText}\n\n${finalReasoning}` : finalReasoning;
     }
+    // Pi retries model failures inside the same turn. The latest assistant
+    // outcome is authoritative; an earlier recovered error must not poison it.
+    if (event.type === "message_end" && event.message.role === "assistant" && event.message.stopReason !== "error") {
+      runError = event.message.stopReason === "aborted" ? "Model request aborted" : "";
+    }
     if (event.type === "message_end" && event.message.role === "assistant" && event.message.stopReason === "error") {
       runError = event.message.errorMessage || "Model request failed";
       send({
