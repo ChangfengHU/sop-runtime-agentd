@@ -75,6 +75,8 @@ npm run build
 test -x "$INSTALL_DIR/node_modules/.bin/pi"
 ln -sfn "$INSTALL_DIR/node_modules/.bin/pi" /usr/local/bin/pi
 
+bash scripts/prepare-codex-workspace.sh
+
 install -d -m 0700 /etc/sop-runtime-agentd/credentials
 install -d -m 0755 /etc/sop-runtime-agentd/providers
 if [[ ! -f /etc/sop-runtime-agentd/agentd.env ]]; then
