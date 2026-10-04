@@ -60,7 +60,7 @@ export class CodexAppServerAdapter implements AgentRuntimeAdapter {
   private spareThread: { threadId: string; workspace: string } | null = null;
 
   private readonly delegates = new Map<string, CodexAppServerAdapter>();
-  constructor(private readonly executionUser?: string) {}
+  constructor(private readonly executionUser?: string, private readonly connectionTest = false) {}
   private forUser(user = process.env.SOP_CODEX_EXECUTION_USER || "claude"): CodexAppServerAdapter {
     let adapter = this.delegates.get(user);
     if (!adapter) { adapter = new CodexAppServerAdapter(user); this.delegates.set(user, adapter); }
@@ -84,7 +84,7 @@ export class CodexAppServerAdapter implements AgentRuntimeAdapter {
   }
 
   async testConnection(context: AdapterRunContext): Promise<AdapterRunResult> {
-    const adapter = new CodexAppServerAdapter(String(context.execution.metadata.execution_user));
+    const adapter = new CodexAppServerAdapter(String(context.execution.metadata.execution_user), true);
     try { return await adapter.run(context); }
     finally { adapter.client?.kill(); }
   }
@@ -145,7 +145,7 @@ export class CodexAppServerAdapter implements AgentRuntimeAdapter {
         env: launch.env,
         // Approval callbacks must be answered or the turn hangs; a turn dispatched through agentd
         // was already authorized by its caller.
-        onRequest: (method) => (/approval/i.test(method) ? { decision: "approved" } : undefined),
+        onRequest: (method) => (/approval/i.test(method) ? { decision: this.connectionTest ? "decline" : "approved" } : undefined),
       });
       try {
         await client.request("initialize", {
@@ -203,7 +203,7 @@ export class CodexAppServerAdapter implements AgentRuntimeAdapter {
         // fall through to a fresh thread
       }
     }
-    const started = await client.request<any>("thread/start", { cwd: workspace, sandbox: "workspace-write" }, 10000);
+    const started = await client.request<any>("thread/start", { cwd: workspace, sandbox: this.connectionTest ? "read-only" : "workspace-write", ...(this.connectionTest ? { approvalPolicy: "never" } : {}) }, 10000);
     const id = String(started?.thread?.id || started?.threadId || "");
     if (!id) throw new Error("codex thread/start 未返回 threadId");
     this.threads.set(key, id);
@@ -215,7 +215,7 @@ export class CodexAppServerAdapter implements AgentRuntimeAdapter {
     if (!this.executionUser) return;
     if (this.spareThread) return;
     const client = await this.ensureClient(workspace);
-    const started = await client.request<any>("thread/start", { cwd: workspace, sandbox: "workspace-write" }, 10000);
+    const started = await client.request<any>("thread/start", { cwd: workspace, sandbox: this.connectionTest ? "read-only" : "workspace-write", ...(this.connectionTest ? { approvalPolicy: "never" } : {}) }, 10000);
     const id = String(started?.thread?.id || started?.threadId || "");
     if (id) this.spareThread = { threadId: id, workspace };
   }
@@ -233,7 +233,7 @@ export class CodexAppServerAdapter implements AgentRuntimeAdapter {
     this.sweepIdle();
     const { execution } = context;
     await prepareExecutionWorkspace({ user: this.executionUser, workspace: execution.workspace });
-    const key = `${execution.sessionRef || execution.id}:${execution.workspace}`;
+    const key = `${execution.sessionRef || execution.id}:${execution.workspace}:${String(execution.metadata.execution_context_id || "")}`;
     const client = await this.ensureClient(execution.workspace);
     const resumeId = execution.sessionPolicy === "resume" ? execution.sessionId || "" : "";
     const threadId = await this.ensureThread(client, key, execution.workspace, resumeId);

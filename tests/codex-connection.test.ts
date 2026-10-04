@@ -20,7 +20,7 @@ async function fixture(t: TestContext, scenario: string) {
   process.env.CODEX_HOME = "/wrong-user-home";
   t.after(async () => { process.env.PATH = oldPath; if(oldHome===undefined)delete process.env.CODEX_HOME;else process.env.CODEX_HOME=oldHome; await fs.rm(root,{recursive:true,force:true}); });
   await fs.writeFile(path.join(root,"codex"), `#!/usr/bin/env node
-const fs=require('node:fs');const readline=require('node:readline');
+const fs=require('node:fs');const readline=require('node:readline');let threads=0;
 if(process.argv[2]==='login')process.exit(0);
 const send=(method,params)=>process.stdout.write(JSON.stringify({jsonrpc:'2.0',method,params})+'\\n');
 const reply=(id,result)=>process.stdout.write(JSON.stringify({jsonrpc:'2.0',id,result})+'\\n');
@@ -28,7 +28,7 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
  const m=JSON.parse(line);
  if(m.method==='initialize')reply(m.id,{});
  if(m.method==='initialized')fs.writeFileSync(${JSON.stringify(path.join(root,'identity.json'))},JSON.stringify({home:process.env.HOME,user:process.env.USER,codexHome:process.env.CODEX_HOME}));
- if(m.method==='thread/start')reply(m.id,{thread:{id:'fixture-thread'}});
+ if(m.method==='thread/start'){threads++;fs.writeFileSync(${JSON.stringify(path.join(root,'thread-count'))},String(threads));reply(m.id,{thread:{id:'fixture-thread-'+threads}});}
  if(m.method==='turn/start'){
   reply(m.id,{});
   const threadId=m.params.threadId;
@@ -78,4 +78,15 @@ test("saved config persists and chat ignores caller-supplied execution_user",asy
  // A turn follows the saved config even if the caller retained a stale workspace.
  for(let i=0;i<100;i++){if(supervisor.listExecutions()[0]?.status==='completed')break;await new Promise(r=>setTimeout(r,20));}
  assert.equal(supervisor.listExecutions()[0]?.status,"completed");
+ const initialContext=execution.metadata.execution_context_id;
+ for(const workspace of [path.join(f.root,"other-workspace"),f.root]){
+  await supervisor.saveInstanceExecutionConfig("codex",{user:f.user,workspace});
+  const next=await supervisor.createTurn(session.id,{instruction:"test",metadata:{execution_context_id:initialContext,execution_user:"root"}});
+  assert.equal(next.execution.workspace,workspace);
+  assert.notEqual(next.execution.metadata.execution_context_id,initialContext);
+  for(let i=0;i<100;i++){if(supervisor.store.getExecution(next.execution.id)?.status==='completed')break;await new Promise(r=>setTimeout(r,20));}
+  assert.equal(supervisor.store.getExecution(next.execution.id)?.status,"completed");
+ }
+ assert.equal(await fs.readFile(path.join(f.root,"thread-count"),"utf8"),"3");
+ assert.equal(store.listExecutionsBySession(session.id).length,3);
 });

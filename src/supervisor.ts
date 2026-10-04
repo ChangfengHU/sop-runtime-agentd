@@ -200,7 +200,7 @@ export class RuntimeAgentSupervisor {
     await prepareExecutionWorkspace(config);
     if (session.metadata.execution_user !== config.user || session.workspace !== config.workspace) {
       session.nativeSessionId = "";
-      session.metadata = { ...session.metadata, execution_user: config.user };
+      session.metadata = { ...session.metadata, execution_user: config.user, execution_context_id: newId("codex-context") };
       session.workspace = config.workspace;
       this.store.saveSession(session);
     }
@@ -227,6 +227,7 @@ export class RuntimeAgentSupervisor {
       await prepareExecutionWorkspace(config);
       input.workspace = config.workspace;
       input.metadata.execution_user = config.user;
+      input.metadata.execution_context_id = newId("codex-context");
     }
     const workspace = path.resolve(input.workspace);
     const stat = await fs.stat(workspace);
@@ -515,6 +516,7 @@ export class RuntimeAgentSupervisor {
         ...mergeTurnMetadata(session.metadata, input.metadata),
         sessionRef: session.id,
         turnIndex,
+        ...(session.engine === "codex" ? { execution_user: session.metadata.execution_user, execution_context_id: session.metadata.execution_context_id } : {}),
       },
     };
     const submitted = await this.submit(submitInput, { sessionRef: session.id });
