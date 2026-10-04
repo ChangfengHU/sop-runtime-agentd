@@ -6,6 +6,7 @@ openclaw/dsh/opencode)归一成统一的 执行/会话/事件/审批/webhook 契
 `node:http` 手写路由,`node:sqlite` 持久化。对外承诺 `agentd.runtime`,唯一消费方 sop-ui。
 
 ## 现状
+- 2026-10-04：Supervisor 0.6.4 已在236部署并验收 Codex 按实例持久化执行用户/工作目录、默认claude、真实登录+模型连接测试、willRetry重连不提前失败。原401聊天和标准codex实例聊天均完成；修复历史root所有的共享workspace父目录，新安装默认准备claude:claude 0750。全套54测试，后续定向14/7及installer1通过；UI桌面/390、保存刷新及实际聊天验收通过。详见 `docs/codex-execution-user-acceptance.md`。源188只更新bootstrap，没有重启源服务。
 - 2026-09-23：修复 pi worker 在自动重试成功后仍保留旧模型错误，导致工具已执行但角色误判失败。新增真实 worker + 本地模型故障注入：工具前/后临时500恢复、持续500与鉴权失败拦截、工具不重复，4项通过；全套47项、typecheck/build通过；实际部署产物故障测试4项通过。源188已发布补丁，187真实安装/删除闭环均通过，新删除巡检实际经历模型错误后自动恢复且工具仅调用1次。详见 `docs/pi-model-retry-acceptance.md`。
 - 2026-09-08 安装升级修复：分支安装优先取fetch后的origin SHA，避免本地旧main导致升级无效；新增--resolve-ref-only只解析待安装提交，保留固定SHA/tag回滚。真实临时Git仓库回归与build/bash语法检查通过；认证目录配套Control55719c1、bridgeb42d25f已推送，本地跨组件联调通过，仍未部署。
 - 2026-09-08 认证目录/安装接续：Supervisor0.6.1新增只读POST /v1/mcp/probe，父进程解析已安装连接凭据，返回schema与连接摘要；安装脚本接受连接清单并原子生成摘要文件，重复安装无变更。33测试/build通过，源码未部署，Control和SPI桥接需配套。源Vault访问凭据仍沿用既有机器安装，不向普通机自动复制。
@@ -20,7 +21,7 @@ openclaw/dsh/opencode)归一成统一的 执行/会话/事件/审批/webhook 契
 
 ## 下一步
 0. 受控发布0.6.0并经Harness验证源角色和普通会话；旧缺策略Agent会话需通过受控入口重新创建，不能从续聊请求补授权限。全引擎策略、上游授权撤回、原生会话归属与文件/网络隔离仍待做。
-1. 仓库 `deploy/sop-runtime-agentd.service` 的 User 与线上对齐(claude),消除重装退化
+1. Codex执行身份已与supervisor基础设施身份分离；不要为修复Codex认证直接把所有supervisor进程切为claude，源Pi受保护凭据可能不可读。其他旧Runtime按需升级0.6.4。
 2. 版本双口径统一:package.json 0.1.0 vs src/supervisor.ts 的 SUPERVISOR_VERSION(sop-ui 拿后者做徽章比较,改版本改 supervisor.ts)
 3. README 的 HTTP API 章节与 http-server.ts 实况对齐(sessions/webhooks/steer/approval 全没写)
 
