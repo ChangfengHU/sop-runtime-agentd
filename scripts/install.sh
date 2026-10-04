@@ -81,6 +81,7 @@ if [[ ! -f /etc/sop-runtime-agentd/agentd.env ]]; then
   umask 077
   {
     printf 'SOP_AGENTD_HOST=127.0.0.1\n'
+    printf 'SOP_CODEX_EXECUTION_USER=claude\n'
     printf 'SOP_AGENTD_PORT=%s\n' "$PORT"
     printf 'SOP_AGENTD_DATA_DIR=/var/lib/sop-runtime-agentd\n'
     printf 'SOP_AGENTD_CREDENTIAL_DIR=/etc/sop-runtime-agentd/credentials\n'

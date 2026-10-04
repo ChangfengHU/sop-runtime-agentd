@@ -1,3 +1,5 @@
+import { CodexAppServerAdapter } from "./adapters/codex-app-server-adapter.js";
+import { defaultExecutionConfig, executionIdentity, prepareExecutionWorkspace, validateInstanceId, type ExecutionConfig } from "./execution-user.js";
 import { configuredSkillBindings, readBoundSkills } from "./skill-bindings.js";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
@@ -39,7 +41,7 @@ import {
 } from "./util.js";
 
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
-export const SUPERVISOR_VERSION = "0.6.3";
+export const SUPERVISOR_VERSION = "0.6.4";
 export const PROTOCOL_VERSION = 1;
 const WEBHOOK_PAYLOAD_TEMPLATE_MAX_CHARS = 8_000;
 
@@ -136,6 +138,74 @@ export class RuntimeAgentSupervisor {
     );
   }
 
+  async getInstanceExecutionConfig(instanceId: string): Promise<ExecutionConfig> {
+    validateInstanceId(instanceId);
+    if (instanceId !== "codex" && !this.store.listSessions(500, instanceId).some(s => s.engine === "codex")) {
+      throw new SupervisorError("执行用户配置目前仅支持 Codex 实例", 400);
+    }
+    return this.store.getExecutionConfig(instanceId) || await defaultExecutionConfig(instanceId);
+  }
+
+  private async parseExecutionConfig(rawInput: unknown): Promise<ExecutionConfig> {
+    const input = rawInput as Record<string, unknown> | null;
+    if (!input || typeof input.user !== "string" || typeof input.workspace !== "string") throw new SupervisorError("请填写执行用户和工作目录", 400);
+    await executionIdentity(input.user);
+    const config = { user: input.user, workspace: input.workspace };
+    await prepareExecutionWorkspace(config);
+    return config;
+  }
+
+  async saveInstanceExecutionConfig(instanceId: string, rawInput: unknown) {
+    await this.getInstanceExecutionConfig(instanceId);
+    const config = await this.parseExecutionConfig(rawInput);
+    // Do not switch an environment underneath an active execution.
+    if (this.store.hasActiveInstanceExecutions(instanceId)) throw new SupervisorError("实例仍有运行中的会话，请完成或取消后再保存", 409);
+    this.store.saveExecutionConfig(instanceId, config);
+    return { config };
+  }
+
+  private connectionTestRunning = false;
+  async testInstanceConnection(instanceId: string, rawInput: unknown) {
+    await this.getInstanceExecutionConfig(instanceId);
+    if (this.connectionTestRunning) throw new SupervisorError("已有连接测试正在执行，请稍后重试", 409);
+    this.connectionTestRunning = true;
+    const started = Date.now();
+    let controller: AbortController | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const config = await this.parseExecutionConfig(rawInput);
+      const adapter = new CodexAppServerAdapter(config.user);
+      const probe = await adapter.probe();
+      if (!probe.ok) return { ok: false, config, stage: "login", reason: probe.reason, detail: probe.detail, elapsedMs: Date.now() - started };
+      controller = new AbortController();
+      timer = setTimeout(() => controller?.abort(), 60000);
+      const timestamp = nowIso();
+      const execution: ExecutionRecord = {
+        id: newId("connection-test"), requestId: newId("test"), instanceId, nodeId: "", sessionRef: "", engine: "codex", status: "running",
+        workspace: config.workspace, outputDir: config.workspace, sessionId: "", nativeRunId: "", sessionPolicy: "ephemeral",
+        instruction: "Connection test. Reply with exactly HARNESS_CONNECTION_OK. Do not call any tools or modify any files.", materials: [],
+        timeoutMs: 60000, createdAt: timestamp, startedAt: timestamp, finishedAt: "", error: "", responseText: "", artifacts: [], metadata: { execution_user: config.user },
+      };
+      const result = await adapter.testConnection({ execution, history: [], signal: controller.signal, emit: async (event) => ({ ...event, id: 0, executionId: execution.id, occurredAt: nowIso() }) });
+      const ok = result.responseText?.trim() === "HARNESS_CONNECTION_OK";
+      return { ok, config, stage: "model", reason: ok ? "" : "模型未返回预期的连接确认", detail: probe.detail, responseText: result.responseText, elapsedMs: Date.now() - started };
+    } catch (error) {
+      return { ok: false, stage: controller?.signal.aborted ? "timeout" : "connection", reason: controller?.signal.aborted ? "连接测试超时（60 秒）" : errorMessage(error), elapsedMs: Date.now() - started };
+    } finally { if (timer) clearTimeout(timer); this.connectionTestRunning = false; }
+  }
+
+  private async bindCodexSession(session: SessionRecord): Promise<void> {
+    if (session.engine !== "codex") return;
+    const config = this.store.getExecutionConfig(session.instanceId) || await defaultExecutionConfig(session.instanceId);
+    await prepareExecutionWorkspace(config);
+    if (session.metadata.execution_user !== config.user || session.workspace !== config.workspace) {
+      session.nativeSessionId = "";
+      session.metadata = { ...session.metadata, execution_user: config.user };
+      session.workspace = config.workspace;
+      this.store.saveSession(session);
+    }
+  }
+
   async createSession(
     rawInput: unknown,
   ): Promise<{ session: SessionRecord; created: boolean; execution?: ExecutionRecord }> {
@@ -152,6 +222,12 @@ export class RuntimeAgentSupervisor {
       throw new SupervisorError(`Agent engine ${input.engine} is not installed in this Runtime Supervisor`, 409);
     }
     assertToolPolicy(input.engine, input.metadata);
+    if (input.engine === "codex") {
+      const config = this.store.getExecutionConfig(input.instanceId) || await defaultExecutionConfig(input.instanceId);
+      await prepareExecutionWorkspace(config);
+      input.workspace = config.workspace;
+      input.metadata.execution_user = config.user;
+    }
     const workspace = path.resolve(input.workspace);
     const stat = await fs.stat(workspace);
     if (!stat.isDirectory()) throw new Error("workspace must be a directory");
@@ -416,6 +492,7 @@ export class RuntimeAgentSupervisor {
         throw new SupervisorError(`Session ${sessionId} already has a running turn ${active.id}`, 409);
       }
     }
+    await this.bindCodexSession(session);
     const turnIndex = session.turnCount + 1;
     const outputDir =
       input.outputDir ??
@@ -462,6 +539,14 @@ export class RuntimeAgentSupervisor {
     }
     assertToolPolicy(input.engine, input.metadata);
 
+    if (input.engine === "codex") {
+      const config = this.store.getExecutionConfig(input.instanceId) || await defaultExecutionConfig(input.instanceId);
+      await prepareExecutionWorkspace(config);
+      input.metadata.execution_user = config.user;
+      if (path.resolve(input.workspace) !== config.workspace) {
+        throw new SupervisorError(`Codex 实例的工作目录为 ${config.workspace}，请使用实例保存的配置`, 400);
+      }
+    }
     const normalized = await this.validateInput(input);
     const provider = input.providerId ? await this.providers.get(input.providerId) : undefined;
     if (input.engine === "sop-native" && !provider) {
@@ -728,7 +813,8 @@ export class RuntimeAgentSupervisor {
       throw new Error(`工作目录不可写:${workspace}(agentd 以 ${os.userInfo().username} 运行,请换一个该用户可写的目录)`);
     }
     const outputDir = assertPathWithin(workspace, input.outputDir, "outputDir");
-    await ensureDir(outputDir);
+    if (input.engine === "codex") await prepareExecutionWorkspace({ user: String(input.metadata.execution_user), workspace: outputDir });
+    else await ensureDir(outputDir);
     const materials = input.materials.map((material) => {
       if (material.kind !== "file" || !material.path) return material;
       return { ...material, path: assertPathWithin(workspace, material.path, `material ${material.id}`) };

@@ -215,3 +215,13 @@ OS-level file/network access; tool access still follows the configured allowlist
 Validation: `npm run build`, `npm test` (36 tests), including real pi worker
 requests with two Skills, unselected Skill exclusion, native compatibility,
 resume, and queue-time file changes. These are local tests, not online acceptance.
+
+### Codex execution identity and connection test
+
+Codex defaults to the `claude` OS user (`SOP_CODEX_EXECUTION_USER`), independently of the supervisor service user. Authentication belongs to that OS user's HOME; the engine never inherits the supervisor's Codex home or OpenAI credentials. Log in with `codex login` as the selected user.
+
+`GET /v1/instances/codex/execution-user` returns the effective configuration. `POST` to the same route saves `{ "user": "claude", "workspace": "/home/claude/harness/codex" }` in SQLite. The directory must be writable by that user. Configuration changes are rejected while the instance has active executions. Subsequent session turns bind to this configuration; switching user or directory resets the native thread while preserving historical records.
+
+`POST /v1/instances/codex/test` with the same body tests login and performs an isolated real model round trip (60-second model timeout). It does not save the candidate configuration or change a chat session. An installed CLI or existing auth file alone is insufficient for success. The response reports login/model/timeout failures without credentials. The Harness instance page exposes both actions.
+
+Recoverable Codex `error` notifications with `willRetry: true` remain running; final completion/failure determines the execution result. Interrupted turns and app-server exits cannot be reported as success.

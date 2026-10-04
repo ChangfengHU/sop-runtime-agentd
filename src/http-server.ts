@@ -85,6 +85,20 @@ export function createHttpServer(supervisor: RuntimeAgentSupervisor): http.Serve
         json(response, 200, { ok: true, ...result });
         return;
       }
+      const instanceConfigRoute = url.pathname.match(/^\/v1\/instances\/([^/]+)\/(execution-user|test)$/);
+      if (instanceConfigRoute) {
+        const instanceId = decodeURIComponent(instanceConfigRoute[1]!);
+        if (method === "GET" && instanceConfigRoute[2] === "execution-user") {
+          json(response, 200, { config: await supervisor.getInstanceExecutionConfig(instanceId) }); return;
+        }
+        if (method === "POST") {
+          const body = await readJson(request);
+          json(response, 200, instanceConfigRoute[2] === "test"
+            ? await supervisor.testInstanceConnection(instanceId, body)
+            : await supervisor.saveInstanceExecutionConfig(instanceId, body)); return;
+        }
+      }
+
       if (method === "GET" && url.pathname === "/v1/adapters") {
         json(response, 200, { adapters: supervisor.listAdapters() });
         return;

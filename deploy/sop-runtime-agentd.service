@@ -8,6 +8,7 @@ Type=simple
 User=root
 Group=root
 WorkingDirectory=/opt/sop-runtime-agentd
+Environment=SOP_CODEX_EXECUTION_USER=claude
 EnvironmentFile=-/etc/sop-runtime-agentd/agentd.env
 ExecStart=/usr/bin/node --disable-warning=ExperimentalWarning /opt/sop-runtime-agentd/dist/src/main.js
 Restart=on-failure

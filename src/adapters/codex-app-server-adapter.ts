@@ -1,6 +1,8 @@
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { executionCommand, prepareExecutionWorkspace } from "../execution-user.js";
 import path from "node:path";
 
 import { AcpClient, type AcpNotification } from "../acp/acp-client.js";
@@ -57,6 +59,14 @@ export class CodexAppServerAdapter implements AgentRuntimeAdapter {
   private readonly running = new Map<string, string>(); // executionId -> threadId
   private spareThread: { threadId: string; workspace: string } | null = null;
 
+  private readonly delegates = new Map<string, CodexAppServerAdapter>();
+  constructor(private readonly executionUser?: string) {}
+  private forUser(user = process.env.SOP_CODEX_EXECUTION_USER || "claude"): CodexAppServerAdapter {
+    let adapter = this.delegates.get(user);
+    if (!adapter) { adapter = new CodexAppServerAdapter(user); this.delegates.set(user, adapter); }
+    return adapter;
+  }
+
   capabilities(): AgentCapabilities {
     return {
       persistentSessions: true,
@@ -71,6 +81,12 @@ export class CodexAppServerAdapter implements AgentRuntimeAdapter {
       localWorkspace: true,
       reasoning: "streaming",
     };
+  }
+
+  async testConnection(context: AdapterRunContext): Promise<AdapterRunResult> {
+    const adapter = new CodexAppServerAdapter(String(context.execution.metadata.execution_user));
+    try { return await adapter.run(context); }
+    finally { adapter.client?.kill(); }
   }
 
   private async resolveExecutable(): Promise<string> {
@@ -101,22 +117,18 @@ export class CodexAppServerAdapter implements AgentRuntimeAdapter {
       detail.installed = false;
       return { ok: false, detail, reason: errorMessage(error) };
     }
-    // Auth stays free: a stored login or an API key env var is signal enough.
-    let authenticated = Boolean(process.env.OPENAI_API_KEY);
-    if (!authenticated) {
-      try {
-        await fs.access(path.join(os.homedir(), ".codex", "auth.json"), fsConstants.F_OK);
-        authenticated = true;
-      } catch {
-        authenticated = false;
-      }
+    const user = this.executionUser || process.env.SOP_CODEX_EXECUTION_USER || "claude";
+    try {
+      const launch = await executionCommand(user, String(detail.executablePath), ["login", "status"]);
+      detail.user = user;
+      detail.home = launch.home;
+      await promisify(execFile)(launch.command, launch.args, { env: launch.env, timeout: 10000 });
+      detail.authenticated = true;
+      return { ok: true, detail, reason: "" };
+    } catch {
+      detail.authenticated = false;
+      return { ok: false, detail, reason: `用户 ${user} 未登录 Codex 或无法启动 CLI，请以该用户执行 codex login` };
     }
-    detail.authenticated = authenticated;
-    return {
-      ok: authenticated,
-      detail,
-      reason: authenticated ? "" : "未登录且未配置 OPENAI_API_KEY(在机器上执行 codex 登录一次即可)",
-    };
   }
 
   private async ensureClient(workspace: string): Promise<AcpClient> {
@@ -127,9 +139,10 @@ export class CodexAppServerAdapter implements AgentRuntimeAdapter {
     if (this.starting) return await this.starting;
     const boot = (async (): Promise<AcpClient> => {
       const executablePath = await this.resolveExecutable();
-      const client = new AcpClient(executablePath, ["app-server"], {
+      const launch = await executionCommand(this.executionUser || process.env.SOP_CODEX_EXECUTION_USER || "claude", executablePath, ["app-server"]);
+      const client = new AcpClient(launch.command, launch.args, {
         cwd: workspace,
-        env: { ...process.env },
+        env: launch.env,
         // Approval callbacks must be answered or the turn hangs; a turn dispatched through agentd
         // was already authorized by its caller.
         onRequest: (method) => (/approval/i.test(method) ? { decision: "approved" } : undefined),
@@ -137,11 +150,12 @@ export class CodexAppServerAdapter implements AgentRuntimeAdapter {
       try {
         await client.request("initialize", {
           clientInfo: { name: "sop-runtime-agentd", version: "0.5.0", title: "SOP Runtime" },
-        });
+        }, 10000);
       } catch (error) {
         client.kill();
         throw error;
       }
+      client.notify("initialized", {});
       client.onNotification((event) => {
         const params = event.params as Record<string, any>;
         const threadId = String(params?.threadId || params?.item?.threadId || "");
@@ -181,7 +195,7 @@ export class CodexAppServerAdapter implements AgentRuntimeAdapter {
     }
     if (resumeId) {
       try {
-        const resumed = await client.request<any>("thread/resume", { threadId: resumeId });
+        const resumed = await client.request<any>("thread/resume", { threadId: resumeId }, 10000);
         const id = String(resumed?.thread?.id || resumed?.threadId || resumeId);
         this.threads.set(key, id);
         return id;
@@ -189,7 +203,7 @@ export class CodexAppServerAdapter implements AgentRuntimeAdapter {
         // fall through to a fresh thread
       }
     }
-    const started = await client.request<any>("thread/start", { cwd: workspace, sandbox: "workspace-write" });
+    const started = await client.request<any>("thread/start", { cwd: workspace, sandbox: "workspace-write" }, 10000);
     const id = String(started?.thread?.id || started?.threadId || "");
     if (!id) throw new Error("codex thread/start 未返回 threadId");
     this.threads.set(key, id);
@@ -198,23 +212,28 @@ export class CodexAppServerAdapter implements AgentRuntimeAdapter {
 
   /** 预热:拉起常驻 app-server 并预建一个 thread 备用。 */
   async prewarm(workspace: string): Promise<void> {
+    if (!this.executionUser) return;
     if (this.spareThread) return;
     const client = await this.ensureClient(workspace);
-    const started = await client.request<any>("thread/start", { cwd: workspace, sandbox: "workspace-write" });
+    const started = await client.request<any>("thread/start", { cwd: workspace, sandbox: "workspace-write" }, 10000);
     const id = String(started?.thread?.id || started?.threadId || "");
     if (id) this.spareThread = { threadId: id, workspace };
   }
 
   async warmup(input: { sessionId: string; workspace: string }): Promise<void> {
+    // Configuration is resolved authoritatively when a turn is submitted.
+    if (!this.executionUser) return;
     this.sweepIdle();
     const client = await this.ensureClient(input.workspace);
     await this.ensureThread(client, input.sessionId, input.workspace, "");
   }
 
   async run(context: AdapterRunContext): Promise<AdapterRunResult> {
+    if (!this.executionUser) return this.forUser(String(context.execution.metadata.execution_user || process.env.SOP_CODEX_EXECUTION_USER || "claude")).run(context);
     this.sweepIdle();
     const { execution } = context;
-    const key = execution.sessionRef || execution.id;
+    await prepareExecutionWorkspace({ user: this.executionUser, workspace: execution.workspace });
+    const key = `${execution.sessionRef || execution.id}:${execution.workspace}`;
     const client = await this.ensureClient(execution.workspace);
     const resumeId = execution.sessionPolicy === "resume" ? execution.sessionId || "" : "";
     const threadId = await this.ensureThread(client, key, execution.workspace, resumeId);
@@ -295,10 +314,18 @@ export class CodexAppServerAdapter implements AgentRuntimeAdapter {
       }
       if (event.method === "turn/completed") {
         const turn = isRecord(params?.turn) ? (params.turn as Record<string, any>) : {};
-        if (turn.status === "failed" || turn.error) {
+        if (turn.status === "failed" || turn.status === "interrupted" || turn.error) {
           turnError = String(turn.error?.message || turn.error || "codex turn failed");
         }
         settleTurn?.();
+        return;
+      }
+      if (event.method === "error" && params?.willRetry === true) {
+        emitChain = emitChain.then(() => context.emit({
+          type: "agent.retrying", status: "running", producer: "codex",
+          subject: { kind: "session", id: threadId }, summary: "Codex 正在重试连接",
+          data: { message: String(params?.error?.message || params?.message || "Reconnecting"), willRetry: true },
+        }));
         return;
       }
       if (event.method === "turn/failed" || event.method === "error") {
@@ -311,8 +338,13 @@ export class CodexAppServerAdapter implements AgentRuntimeAdapter {
     this.running.set(execution.id, threadId);
     const onAbort = (): void => {
       client.notify("turn/interrupt", { threadId });
+      settleTurn?.();
     };
     context.signal.addEventListener("abort", onAbort, { once: true });
+    const watchdog = setInterval(() => {
+      if (!client.alive) { turnError = "Codex app-server 已退出"; settleTurn?.(); }
+    }, 250);
+
 
     await context.emit({
       type: "agent.turn.started",
@@ -324,8 +356,9 @@ export class CodexAppServerAdapter implements AgentRuntimeAdapter {
     });
 
     try {
+      if (context.signal.aborted) throw new Error("Codex turn was cancelled");
       const prompt = `${execution.instruction}${outputDirective(execution)}`;
-      await client.request("turn/start", { threadId, input: [{ type: "text", text: prompt }], summary: "auto" });
+      await client.request("turn/start", { threadId, input: [{ type: "text", text: prompt }], summary: "auto" }, 10000);
       await finished;
       await emitChain;
       if (context.signal.aborted) throw new Error("Codex turn was cancelled");
@@ -353,18 +386,26 @@ export class CodexAppServerAdapter implements AgentRuntimeAdapter {
         ...(finalReasoning ? { reasoningText: finalReasoning } : {}),
       };
     } finally {
+      clearInterval(watchdog);
       context.signal.removeEventListener("abort", onAbort);
       this.listeners.delete(threadId);
       this.running.delete(execution.id);
     }
   }
 
+  close(): void {
+    this.client?.kill();
+    for (const adapter of this.delegates.values()) adapter.close();
+  }
+
   async cancel(executionId: string): Promise<void> {
+    if (!this.executionUser) { await Promise.all([...this.delegates.values()].map(adapter => adapter.cancel(executionId))); return; }
     const threadId = this.running.get(executionId);
     if (threadId && this.client?.alive) this.client.notify("turn/interrupt", { threadId });
   }
 
   async steer(executionId: string, message: string): Promise<void> {
+    if (!this.executionUser) { await Promise.all([...this.delegates.values()].map(adapter => adapter.steer(executionId, message))); return; }
     const threadId = this.running.get(executionId);
     if (threadId && this.client?.alive) {
       await this.client.request("turn/steer", { threadId, input: [{ type: "text", text: message }] });

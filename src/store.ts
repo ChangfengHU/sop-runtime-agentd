@@ -40,6 +40,7 @@ export class SupervisorStore {
     this.database = new DatabaseSync(databasePath);
     this.database.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
     this.database.exec(`
+      CREATE TABLE IF NOT EXISTS instance_execution_config (instance_id TEXT PRIMARY KEY, payload_json TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS executions (
         id TEXT PRIMARY KEY,
         request_id TEXT NOT NULL UNIQUE,
@@ -91,6 +92,19 @@ export class SupervisorStore {
     `);
     this.migrateRuntimeEventsForeignKey();
     this.ensureExecutionSessionColumn();
+  }
+
+  getExecutionConfig(instanceId: string): import("./execution-user.js").ExecutionConfig | undefined {
+    const row = this.database.prepare("SELECT payload_json FROM instance_execution_config WHERE instance_id = ?").get(instanceId) as JsonRow | undefined;
+    return row ? JSON.parse(row.payload_json) : undefined;
+  }
+
+  hasActiveInstanceExecutions(instanceId: string): boolean {
+    return Boolean(this.database.prepare("SELECT 1 FROM executions WHERE instance_id = ? AND status NOT IN ('completed','failed','cancelled') LIMIT 1").get(instanceId));
+  }
+
+  saveExecutionConfig(instanceId: string, config: import("./execution-user.js").ExecutionConfig): void {
+    this.database.prepare("INSERT INTO instance_execution_config(instance_id,payload_json) VALUES (?,?) ON CONFLICT(instance_id) DO UPDATE SET payload_json=excluded.payload_json").run(instanceId, JSON.stringify(config));
   }
 
   // Session-level events have no executions row, so the legacy FOREIGN KEY on
