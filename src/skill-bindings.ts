@@ -50,6 +50,8 @@ export async function readBoundSkills(workspace: string, bindings: SkillBinding[
     const filePath = await fs.realpath(stat.isDirectory() ? path.join(location, "SKILL.md") : location).catch(() => { throw Error("configured_skill_missing"); });
     if (!filePath.startsWith(root + path.sep) || path.basename(filePath) !== "SKILL.md") throw Error("configured_skill_path_invalid");
     if (!(await fs.stat(filePath)).isFile()) throw Error("configured_skill_missing");
+    if(Boolean(binding.release_ref)!==Boolean(binding.files))throw Error('configured_skill_release_inventory_required');
+    if(binding.files)await verifyBoundInventory(path.dirname(filePath),binding.files);
     const buffer = await fs.readFile(filePath); total += buffer.length;
     if (!buffer.length || buffer.length > 200_000 || total > 500_000) throw Error("configured_skill_content_invalid");
     const contentDigest = `sha256:${createHash("sha256").update(buffer).digest("hex")}`;
@@ -59,4 +61,24 @@ export async function readBoundSkills(workspace: string, bindings: SkillBinding[
     result.push({ binding, filePath, content: buffer.toString("utf8"), contentDigest });
   }
   return result;
+}
+
+async function verifyBoundInventory(root:string,files:NonNullable<SkillBinding['files']>){
+  const expected=new Map(files.map(file=>[file.path,file.sha256]));
+  if(expected.size!==files.length||!expected.has('SKILL.md')||files.some(f=>f.path.startsWith('/')||f.path.includes('\\')||f.path.split('/').some(p=>!p||p==='.'||p==='..')))throw Error('configured_skill_inventory_invalid');
+  const seen=new Set<string>();let total=0;
+  async function visit(directory:string){
+    for(const entry of await fs.readdir(directory,{withFileTypes:true})){
+      if(entry.isSymbolicLink())throw Error('configured_skill_inventory_symlink');
+      const location=path.join(directory,entry.name);
+      if(entry.isDirectory()){await visit(location);continue;}
+      if(!entry.isFile())throw Error('configured_skill_inventory_invalid');
+      const name=path.relative(root,location).split(path.sep).join('/');
+      if(!expected.has(name))throw Error('configured_skill_inventory_changed');
+      const stat=await fs.stat(location);total+=stat.size;if(total>20_000_000)throw Error('configured_skill_inventory_too_large');
+      const actual='sha256:'+createHash('sha256').update(await fs.readFile(location)).digest('hex');
+      if(actual!==expected.get(name))throw Error('configured_skill_inventory_changed');seen.add(name);
+    }
+  }
+  await visit(root);if(seen.size!==expected.size)throw Error('configured_skill_inventory_changed');
 }

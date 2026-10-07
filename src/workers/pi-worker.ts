@@ -200,7 +200,7 @@ async function run(input: PiWorkerInput): Promise<void> {
     if (!skill) throw new Error("configured_skill_load_mismatch");
     send({ kind:"event", type:"skill.bound", subjectKind:"skill", subjectId:item.binding.id,
       summary:`Bound Skill ${item.binding.id}@${item.binding.version}`,
-      data:{skillName:skill.name,skillPath:item.binding.path,digest:item.binding.digest,contentDigest:item.contentDigest,contentLoaded:true} });
+      data:{skillName:skill.name,skillPath:item.binding.path,digest:item.binding.digest,contentDigest:item.contentDigest,contentLoaded:true,...(item.binding.release_ref?{releaseRef:item.binding.release_ref,inventoryVerified:true}:{})} });
   }
 
   // 内置工具 + 已加载扩展注册的工具名。tools 是白名单(sdk allowedToolNames):
@@ -344,7 +344,7 @@ async function run(input: PiWorkerInput): Promise<void> {
         subjectKind: "tool",
         subjectId: event.toolCallId,
         summary: `${event.toolName} ${event.isError ? "failed" : "completed"}`,
-        data: { toolName: event.toolName, isError: event.isError },
+        data: { toolName: event.toolName, isError: event.isError, ...(input.mcpTools?.find(tool=>tool.name===event.toolName)?{toolId:input.mcpTools.find(tool=>tool.name===event.toolName)!.id}:{}) },
       });
     } else if (event.type === "agent_start") {
       send({

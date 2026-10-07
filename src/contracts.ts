@@ -61,6 +61,8 @@ export const skillBindingSchema = z.object({
   path: z.string().min(1),
   digest: z.string().default(""),
   content_digest: z.string().regex(/^sha256:[a-f0-9]{64}$/).optional(),
+  release_ref: z.object({capabilityId:z.string().regex(/^skill:[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/),releaseId:z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/),manifestDigest:z.string().regex(/^sha256:[a-f0-9]{64}$/)}).strict().optional(),
+  files: z.array(z.object({path:z.string().min(1).max(500),sha256:z.string().regex(/^sha256:[a-f0-9]{64}$/)}).strict()).min(1).max(2000).optional(),
 });
 
 export type SkillBinding = z.infer<typeof skillBindingSchema>;

@@ -22,6 +22,7 @@ export async function prepareExecutionMcp(execution: Pick<ExecutionRecord, "meta
       const tool = binding.tools.find((item) => item.name === name);
       const url = new URL(`/api/agent-presets/${encodeURIComponent(String(snapshot.agent_id))}/mcp-access`, origin);
       url.search = new URLSearchParams({ runtime_id: String(snapshot.runtime_id), version: String(snapshot.agent_version), server_id: binding.server_id, tool_name: name, schema_digest: tool?.schema_digest || "", binding_digest: mcpBindingDigest(binding) }).toString();
+      if(typeof snapshot.capability_binding_id==='string')url.searchParams.set('capability_binding_id',snapshot.capability_binding_id);
       let response: Response;
       try { response = await fetch(url, { redirect: "error", signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]) }); }
       catch { throw Error("mcp_environment_check_unavailable"); }
