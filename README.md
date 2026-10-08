@@ -97,7 +97,9 @@ services without that endpoint reject MCP dispatch instead of skipping checks.
 
 Credential references use `vault:<key>` for a complete header string, or
 `vault:<key>#<field>` for a top-level string field (for example
-`vault:service:example#authorization`). No Bearer prefix is guessed or added.
+`vault:service:example#authorization`). An existing exact field remains authoritative.
+For a missing `authorization` field only, an existing `MCP_TOKEN` or `token` string
+may supply the Bearer header; no credential is issued or substituted.
 The source host's private Vault credential file defaults to
 `/etc/sop-runtime-agentd/credentials/fleet-vault.key`; optional overrides are
 `SOP_MCP_VAULT_TOKEN_FILE` and `SOP_MCP_VAULT_URL`. Hosts without the required
@@ -241,3 +243,36 @@ the model. Diagnose the existing service credential/reference rather than retryi
 side-effecting tools. Validation: `npm run typecheck`, `npm run build` and
 `node --import tsx --test tests/mcp-session.test.ts tests/pi-mcp.test.ts` (7 passed,
 including actual SDK HTTP denials and a real local supervisor/worker MCP call).
+
+
+### Managed published MCP preparation (Supervisor 0.6.7)
+
+`POST /v1/mcp/install-managed` installs the exact frozen connection needed by a
+preparing Harness capability binding. The strict body contains `connection`
+(`server_id`, HTTPS `url`, Vault header references) and `context` (`agent_id`,
+`agent_version`, `runtime_id`, `capability_binding_id`, `tool_name`, `schema_digest`).
+The trusted Control Plane must confirm the same connection digest, selected tool,
+Agent version and an active, unexpired preparation lease with `credential_install=1`.
+Ordinary catalog discovery or an already-ready session does not grant installation.
+
+The route requires the configured supervisor internal token or, when absent, the
+private local file `/etc/sop-runtime-agentd/bridge-credentials/mcp-install.key`
+(`SOP_MCP_INSTALL_TOKEN_FILE` can select another path). The file must be regular,
+owned by root/current service UID, and have no executable, group-write or world
+permissions. Missing auth returns403, incorrect auth401; invalid files fail closed.
+This key authenticates only the managed installer and does not change authorization
+on legacy public API routes. The paired Bridge reads the same local key only for
+this exact installer hop, never from a caller-supplied header.
+
+Installation merges the approved digest atomically into the existing connection
+allowlist, preserves unrelated entries, and is idempotent under concurrent requests.
+It writes no upstream token. The normal MCP probe and every tool load/call retain
+their existing binding, schema, Agent/version and credential checks. Default native
+bootstrap provisions the local service key and the existing authorized Vault reader;
+business Agents receive only connection references and selected tools.
+
+Validation: `node --import tsx --test tests/mcp-install-auth.test.ts
+ tests/mcp-managed-install.test.ts tests/mcp-credential-binding.test.ts
+ tests/mcp-probe.test.ts tests/pi-mcp.test.ts tests/http-server.test.ts` (9 checks),
+plus `npm run build`. Private production acceptance is indexed by the owning Harness
+Control Plane documentation; upstream credentials and personal records are omitted.
