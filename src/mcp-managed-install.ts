@@ -14,6 +14,16 @@ const manifestSchema = z.object({ connection: mcpConnectionSchema, context: cont
 const installedSchema = z.object({ bindings: z.array(z.string().regex(/^sha256:[a-f0-9]{64}$/)).max(1000) }).strict();
 const locks = new Map<string, Promise<void>>();
 
+export async function managedMcpInstallToken(file=process.env.SOP_MCP_INSTALL_TOKEN_FILE||'/etc/sop-runtime-agentd/bridge-credentials/mcp-install.key') {
+  try {
+    const stat=await fs.lstat(file);
+    if(!stat.isFile()||stat.isSymbolicLink()||(stat.mode&0o037)!==0||![0,process.getuid?.()].includes(stat.uid))throw Error('mcp_install_service_credential_invalid');
+    const token=(await fs.readFile(file,'utf8')).trim();
+    if(!token||/[\r\n]/.test(token))throw Error('mcp_install_service_credential_invalid');
+    return token;
+  }catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return '';throw Error('mcp_install_service_credential_invalid');}
+}
+
 /** Install exactly the frozen Fleet connection authorized for this preparing session. */
 export async function installManagedMcpConnection(raw: unknown, signal: AbortSignal, options: { destination?: string; fetch?: typeof fetch; controlOrigin?: string } = {}) {
   const parsed = manifestSchema.safeParse(raw);
