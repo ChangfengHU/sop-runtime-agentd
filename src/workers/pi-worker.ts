@@ -84,7 +84,12 @@ function buildPrompt(input: PiWorkerInput, skills: Awaited<ReturnType<typeof rea
     "Materials:",
     materials,
   ].join("\n");
-  return [...skills.map(({binding, content, filePath}) => `Bound Skill ${binding.id}@${binding.version} (base directory: ${path.dirname(filePath)}):\n${content}`), request].join("\n\n");
+  return [...skills.map(({binding, content, filePath}) => [
+    `Bound Skill ${binding.id}@${binding.version} (base directory: ${path.dirname(filePath)}):`,
+    `SKILL.md path: ${filePath}`,
+    "Resolve this Skill's relative file references against its own base directory. Use absolute paths with file tools; the execution working directory may differ.",
+    content,
+  ].join("\n")), request].join("\n\n");
 }
 
 function extractAssistantText(event: AgentSessionEvent): string | undefined {
@@ -185,6 +190,7 @@ async function run(input: PiWorkerInput): Promise<void> {
     appendSystemPrompt: [
       "You are the execution engine for one SOP Runtime Node.",
       "Use only the explicitly bound Skills when provided. Do not invent hidden adapter fields.",
+      "Each bound Skill has its own base directory. Resolve its relative file links, references and scripts there, not against the execution working directory or another Skill. Use absolute paths with file tools.",
       `Write every business output under SOP_OUTPUT_DIR: ${input.outputDir}`,
       "Treat manifest.json as a system index, not a business artifact.",
       "Use the instruction and materials as the complete public input contract.",

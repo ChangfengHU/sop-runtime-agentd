@@ -71,6 +71,14 @@ test('real pi sessions load every configured skill on first and resumed turns, p
     assert.equal(requests.length,2);
     for(const request of requests){
       const sent=JSON.stringify(request.messages);assert.match(sent,/SECRET_SKILL_BODY_one/);assert.match(sent,/SECRET_SKILL_BODY_two/);assert.doesNotMatch(sent,/SECRET_SKILL_BODY_unselected/);
+      const messages=request.messages as Array<{role:string;content:string|Array<{type:string;text?:string}>}>;
+      const content=(message:typeof messages[number])=>typeof message.content==='string'?message.content:message.content.map(part=>part.text||'').join('\n');
+      const system=messages.filter(message=>message.role==='system').map(content).join('\n');
+      assert.match(system,/Resolve its relative file links, references and scripts there, not against the execution working directory or another Skill/);
+      const input=messages.filter(message=>message.role==='user').map(content).join('\n');
+      for(const binding of [one,two]) {
+        assert.ok(input.includes(`SKILL.md path: ${path.join(binding.path,'SKILL.md')}`),'model input must identify each bound Skill directory on initial and resumed turns');
+      }
       assert.deepEqual(request.tools.map(t=>t.function.name),['read']);
     }
     for(const id of [execution.id,second.execution.id]) {
