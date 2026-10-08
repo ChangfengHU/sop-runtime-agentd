@@ -22,6 +22,7 @@ test("Fleet installation needs an exact immutable-session grant, retains unrelat
     const fetcher: typeof fetch = async (url, options) => {
       const query = new URL(String(url)); assert.equal(query.origin, "https://control.vyibc.com"); assert.equal(options?.redirect, "error");
       assert.equal(query.searchParams.get("capability_binding_id"), context.capability_binding_id);
+      assert.equal(query.searchParams.get("credential_install"), "1");
       assert.equal(query.searchParams.get("version"), "2"); assert.equal(query.searchParams.get("schema_digest"), context.schema_digest);
       return Response.json({ ok: true, allowed: true, capability_binding_id: context.capability_binding_id, agent_version: 2 });
     };

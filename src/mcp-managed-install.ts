@@ -22,7 +22,7 @@ export async function installManagedMcpConnection(raw: unknown, signal: AbortSig
   const digest = mcpBindingDigest(connection), origin = options.controlOrigin || process.env.SOP_MCP_CONTROL_URL || "https://control.vyibc.com";
   if (new URL(origin).protocol !== "https:") throw Error("mcp_control_endpoint_invalid");
   const url = new URL(`/api/agent-presets/${encodeURIComponent(context.agent_id)}/mcp-access`, origin);
-  url.search = new URLSearchParams({ runtime_id: context.runtime_id, version: String(context.agent_version), capability_binding_id: context.capability_binding_id, server_id: connection.server_id, tool_name: context.tool_name, schema_digest: context.schema_digest, binding_digest: digest }).toString();
+  url.search = new URLSearchParams({ runtime_id: context.runtime_id, version: String(context.agent_version), capability_binding_id: context.capability_binding_id, credential_install: "1", server_id: connection.server_id, tool_name: context.tool_name, schema_digest: context.schema_digest, binding_digest: digest }).toString();
   let response: Response;
   try { response = await (options.fetch || fetch)(url, { redirect: "error", signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]) }); }
   catch { throw Error("mcp_environment_check_unavailable"); }
