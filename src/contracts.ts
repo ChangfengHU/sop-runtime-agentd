@@ -197,6 +197,8 @@ export type CreateExecutionInput = z.infer<typeof createExecutionSchema>;
 export interface AgentCapabilities {
   /** Session-bound MCP tools with parent-process credential handling. */
   mcpTools?: boolean;
+  /** Immutable Fleet release bindings and complete Skill inventories. */
+  capabilityReleaseBindings?: boolean;
   singleDelegation?: boolean;
   persistentSessions: boolean;
   streamingEvents: boolean;

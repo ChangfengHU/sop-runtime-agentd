@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { StreamableHTTPClientTransport, StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv-provider.js";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
@@ -105,7 +105,12 @@ export class McpSession {
       }
     } catch (error) {
       await this.close();
+      this.tools.length = 0;
       if (error instanceof Error && /^mcp_[a-z_]+$/.test(error.message)) throw error;
+      // The SDK message may contain an upstream body or URL. Keep only the
+      // transport status, so operators can diagnose authentication safely.
+      if (error instanceof StreamableHTTPError && error.code === 401) throw Error("mcp_connection_unauthorized");
+      if (error instanceof StreamableHTTPError && error.code === 403) throw Error("mcp_connection_forbidden");
       throw Error("mcp_session_prepare_failed");
     }
   }

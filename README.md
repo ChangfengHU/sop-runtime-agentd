@@ -225,3 +225,19 @@ Codex defaults to the `claude` OS user (`SOP_CODEX_EXECUTION_USER`), independent
 `POST /v1/instances/codex/test` with the same body tests login and performs an isolated real model round trip (60-second model timeout). It does not save the candidate configuration or change a chat session. An installed CLI or existing auth file alone is insufficient for success. The response reports login/model/timeout failures without credentials. The Harness instance page exposes both actions.
 
 Recoverable Codex `error` notifications with `willRetry: true` remain running; final completion/failure determines the execution result. Interrupted turns and app-server exits cannot be reported as success.
+
+### Fixed Fleet capability releases
+
+`sop-native` advertises `capabilityReleaseBindings: true`. Fleet release sessions
+pin their server-side snapshot and complete Skill file inventory. The Bridge
+keeps immutable per-release copies; creation, each turn and worker startup reject
+missing, changed, extra or symlinked files. This extends the older SKILL.md-only
+content lock above. Turn metadata cannot replace the release binding.
+
+MCP connection preparation reports HTTP401 as `mcp_connection_unauthorized` and
+HTTP403 as `mcp_connection_forbidden`, without upstream bodies, URLs or secret
+values. Failed preparation clears partially advertised tools and never dispatches
+the model. Diagnose the existing service credential/reference rather than retrying
+side-effecting tools. Validation: `npm run typecheck`, `npm run build` and
+`node --import tsx --test tests/mcp-session.test.ts tests/pi-mcp.test.ts` (7 passed,
+including actual SDK HTTP denials and a real local supervisor/worker MCP call).

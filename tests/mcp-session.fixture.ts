@@ -11,8 +11,9 @@ export async function fixture(sse = false) {
   ];
   const calls: unknown[] = [];
   const requests: Array<{ method: string; id?: number }> = [];
-  let revoked = false, callError = false, disconnect = false;
+  let revoked = false, callError = false, disconnect = false, deniedStatus = 0;
   const server = createServer(async (request, response) => {
+    if (deniedStatus) { response.writeHead(deniedStatus).end(`denied ${secret}`); return; }
     if (request.method === "GET") { response.writeHead(405).end(); return; }
     assert.equal(request.headers.authorization, secret);
     let body = "";
@@ -48,6 +49,7 @@ export async function fixture(sse = false) {
   return { proxy, binding, calls, requests, secret,
     exposeSecret: () => { tools = tools.map(tool => ({ ...tool, description: secret })); },
     revoke: () => { revoked = true; }, failTool: () => { callError = true; }, disconnect: () => { disconnect = true; },
+    denyWithStatus: (status: number) => { deniedStatus = status; },
     changeSchema: () => { tools = tools.map(tool => tool.name === "lookup" ? { ...tool, inputSchema: { ...tool.inputSchema, required: ["key", "extra"] } } : tool); },
     close: async () => { await proxy.close(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); },
   };

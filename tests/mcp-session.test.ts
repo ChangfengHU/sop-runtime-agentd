@@ -56,3 +56,21 @@ test("startup refuses changed schemas, plaintext credentials and unbound selecti
     } finally { await f.close(); }
   }
 });
+
+test("real MCP HTTP denials report safe authentication codes and clear partial tool preparation", async () => {
+  for (const [status, code] of [[401, "mcp_connection_unauthorized"], [403, "mcp_connection_forbidden"]] as const) {
+    const first = await fixture(), denied = await fixture();
+    try {
+      denied.denyWithStatus(status);
+      const deniedBinding = { ...denied.binding, server_id: "denied" };
+      await assert.rejects(first.proxy.prepare([first.binding, deniedBinding], ["records::lookup", "denied::lookup"]), error => {
+        assert.ok(error instanceof Error);
+        assert.equal(error.message, code);
+        assert.ok(!JSON.stringify(error).includes(first.secret));
+        return true;
+      });
+      assert.equal(first.proxy.tools.length, 0);
+      assert.equal(first.calls.length + denied.calls.length, 0);
+    } finally { await first.close(); await denied.close(); }
+  }
+});
