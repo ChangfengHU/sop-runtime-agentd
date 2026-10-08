@@ -7,6 +7,7 @@ import { errorMessage, SupervisorError, WebhookRateLimitError } from "./util.js"
 import { listAgentTools } from "./tools-catalog.js";
 
 import { probeMcpConnection } from "./mcp-probe.js";
+import { installManagedMcpConnection } from "./mcp-managed-install.js";
 
 const WEBHOOK_HEADER_ALLOWLIST = ["x-github-event", "x-event-type", "user-agent"];
 
@@ -84,6 +85,11 @@ export function createHttpServer(supervisor: RuntimeAgentSupervisor): http.Serve
         const result = await probeMcpConnection(await readJson(request), AbortSignal.timeout(45_000));
         json(response, 200, { ok: true, ...result });
         return;
+      }
+      if (method === "POST" && url.pathname === "/v1/mcp/install-managed") {
+        if (!supervisor.config.internalToken) { json(response, 403, { error: "mcp_install_service_auth_required" }); return; }
+        const result = await installManagedMcpConnection(await readJson(request), AbortSignal.timeout(30_000));
+        json(response, 200, { ok: true, ...result }); return;
       }
       const instanceConfigRoute = url.pathname.match(/^\/v1\/instances\/([^/]+)\/(execution-user|test)$/);
       if (instanceConfigRoute) {

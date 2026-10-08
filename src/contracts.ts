@@ -199,6 +199,7 @@ export interface AgentCapabilities {
   mcpTools?: boolean;
   /** Immutable Fleet release bindings and complete Skill inventories. */
   capabilityReleaseBindings?: boolean;
+  managedMcpBindings?: boolean;
   singleDelegation?: boolean;
   persistentSessions: boolean;
   streamingEvents: boolean;

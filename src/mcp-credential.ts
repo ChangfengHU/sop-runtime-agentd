@@ -1,5 +1,17 @@
 import fs from "node:fs/promises";
 
+/** Existing Fleet service records retain their token field; no duplicate secret is stored. */
+export function mcpCredentialValue(value: unknown, field?: string): string {
+  const record = value && typeof value === "object" ? value as Record<string, unknown> : undefined;
+  let selected = field && record ? record[field] : value;
+  if (selected === undefined && field === "authorization" && record) {
+    const token = record.MCP_TOKEN ?? record.token;
+    if (typeof token === "string" && token && !/[\r\n]/.test(token)) selected = /^Bearer /i.test(token) ? token : `Bearer ${token}`;
+  }
+  if (typeof selected !== "string" || !selected || /[\r\n]/.test(selected)) throw Error("mcp_credential_value_invalid");
+  return selected;
+}
+
 export async function resolveMcpCredential(reference: string, signal: AbortSignal): Promise<string> {
   const match = /^vault:([^#]+)(?:#([a-zA-Z0-9_.-]+))?$/.exec(reference);
   if (!match) throw Error("mcp_credential_reference_invalid");
@@ -22,9 +34,5 @@ export async function resolveMcpCredential(reference: string, signal: AbortSigna
   if (!text) throw Error("mcp_credential_unavailable");
   const record = JSON.parse(text) as { ok?: boolean; value?: unknown };
   if (!record.ok) throw Error("mcp_credential_unavailable");
-  const value = match[2] && record.value && typeof record.value === "object"
-    ? (record.value as Record<string, unknown>)[match[2]] : record.value;
-  if (typeof value !== "string" || !value) throw Error("mcp_credential_value_invalid");
-  return value;
+  return mcpCredentialValue(record.value, match[2]);
 }
-

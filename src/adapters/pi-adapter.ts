@@ -36,6 +36,7 @@ export class PiAdapter implements AgentRuntimeAdapter {
     return {
       mcpTools: true,
       capabilityReleaseBindings: true,
+      managedMcpBindings: true,
       singleDelegation: true,
       persistentSessions: true,
       streamingEvents: true,
